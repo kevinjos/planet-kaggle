@@ -5,198 +5,182 @@ import numpy as np
 
 from planetutils import DataHandler
 
-atmos = ['cloudy', 'partly_cloudy', 'haze', 'clear']
-landuse = ['artisinal_mine', 'blooming', 'blow_down', 'agriculture', 'bare_ground',
+
+DH = DataHandler()
+DH.set_train_labels()
+ATMOS = ['cloudy', 'partly_cloudy', 'haze', 'clear']
+LANDUSE = ['artisinal_mine', 'blooming', 'blow_down', 'agriculture', 'bare_ground',
            'primary', 'road', 'selective_logging', 'slash_burn', 'water',
            'conventional_mine', 'cultivation', 'habitation']
 
-num_classes_atmos = len(atmos)
-num_classes_landuse = len(landuse)
-imgwidth, imgheight, numchans = 256, 256, 4
-input_shape = (imgwidth, imgheight, numchans)
+W, H, CHANS = 256, 256, 4
+IMG_SHAPE = (W, H, CHANS)
 
-dh = DataHandler()
-dh.set_train_labels()
 
-# Setup image data generators
-train_datagen = keras.preprocessing.image.ImageDataGenerator(
-    rescale=1. / (np.power(2, 16) - 1),
-    shear_range=0.2,
-    zoom_range=0.2,
-    horizontal_flip=True)
+def single_label_cnn(nc=len(ATMOS)):
+    model = keras.models.Sequential()
+    model.add(keras.layers.Conv2D(32, kernel_size=(3, 3),
+              activation='relu',
+              input_shape=IMG_SHAPE,
+              name="Conv2D-1"))
+    model.add(keras.layers.Conv2D(64, (3, 3), activation='relu', name="Conv2D-2"))
+    model.add(keras.layers.MaxPooling2D(pool_size=(2, 2), name="MaxPooling2D"))
+    model.add(keras.layers.Dropout(0.25, name="Dropout-1"))
+    model.add(keras.layers.Flatten(name="Flatten"))
+    model.add(keras.layers.Dense(128, activation='relu', name="Dense-relu"))
+    model.add(keras.layers.Dropout(0.5, name="Dropout-2"))
+    model.add(keras.layers.Dense(nc, activation='softmax', name="Dense-softmax"))
 
-test_datagen = keras.preprocessing.image.ImageDataGenerator(
-    rescale=1. / (np.power(2, 16) - 1))
+    model.compile(loss=keras.losses.categorical_crossentropy,
+                  optimizer=keras.optimizers.Adadelta(),
+                  metrics=['accuracy'])
+    return model
 
-# Setup tensorboard callbacks
-graphdir = "/graph"
-tb_cb_model_atmos = keras.callbacks.TensorBoard(log_dir=dh.basepath + graphdir + "/atmos", histogram_freq=0,
-                                                write_graph=True, write_images=True)
-tb_cb_model_haze = keras.callbacks.TensorBoard(log_dir=dh.basepath + graphdir + "/haze", histogram_freq=0,
-                                               write_graph=True, write_images=True)
-tb_cb_model_partly_cloudy = keras.callbacks.TensorBoard(log_dir=dh.basepath + graphdir + "/partly-cloudy", histogram_freq=0,
-                                                        write_graph=True, write_images=True)
-tb_cb_model_clear = keras.callbacks.TensorBoard(log_dir=dh.basepath + graphdir + "/clear", histogram_freq=0,
-                                                write_graph=True, write_images=True)
 
-# Setup model checkpoint callbacks
-modeldir = "/model/"
-mc_cb_model_atmos = keras.callbacks.ModelCheckpoint(dh.basepath + modeldir + 'atmos.{epoch:02d}-{val_loss:.2f}.hdf5', monitor='val_loss',
-                                                    verbose=0, save_best_only=False, save_weights_only=False, mode='auto', period=1)
-mc_cb_model_haze = keras.callbacks.ModelCheckpoint(dh.basepath + modeldir + 'lu.haze.{epoch:02d}-{val_loss:.2f}.hdf5', monitor='val_loss',
-                                                   verbose=0, save_best_only=False, save_weights_only=False, mode='auto', period=1)
-mc_cb_model_partly_cloudy = keras.callbacks.ModelCheckpoint(dh.basepath + modeldir + 'lu.partly_cloudy.{epoch:02d}-{val_loss:.2f}.hdf5', monitor='val_loss',
-                                                            verbose=0, save_best_only=False, save_weights_only=False, mode='auto', period=1)
-mc_cb_model_clear = keras.callbacks.ModelCheckpoint(dh.basepath + modeldir + 'lu.clear.{epoch:02d}-{val_loss:.2f}.hdf5', monitor='val_loss',
-                                                    verbose=0, save_best_only=False, save_weights_only=False, mode='auto', period=1)
+def multi_label_cnn(nc=len(LANDUSE)):
+    model = keras.models.Sequential()
+    model.add(keras.layers.Conv2D(32, kernel_size=(3, 3),
+              activation='relu',
+              input_shape=IMG_SHAPE,
+              name="Conv2D-1"))
+    model.add(keras.layers.Conv2D(64, (3, 3), activation='relu', name="Conv2D-2"))
+    model.add(keras.layers.MaxPooling2D(pool_size=(2, 2), name="MaxPooling2D"))
+    model.add(keras.layers.Dropout(0.25, name="Dropout-1"))
+    model.add(keras.layers.Flatten(name="Flatten"))
+    model.add(keras.layers.Dense(128, activation='relu', name="Dense-relu"))
+    model.add(keras.layers.Dropout(0.5, name="Dropout-2"))
+    model.add(keras.layers.Dense(nc, activation='sigmoid', name="Dense-sigmoid"))
 
-# CNN
-model_atmos = keras.models.Sequential()
-model_atmos.add(keras.layers.Conv2D(32, kernel_size=(3, 3),
-                activation='relu',
-                input_shape=input_shape))
-model_atmos.add(keras.layers.Conv2D(64, (3, 3), activation='relu'))
-model_atmos.add(keras.layers.MaxPooling2D(pool_size=(2, 2)))
-model_atmos.add(keras.layers.Dropout(0.25))
-model_atmos.add(keras.layers.Flatten())
-model_atmos.add(keras.layers.Dense(128, activation='relu'))
-model_atmos.add(keras.layers.Dropout(0.5))
-model_atmos.add(keras.layers.Dense(num_classes_atmos, activation='softmax'))
+    model.compile(loss=keras.losses.binary_crossentropy,
+                  optimizer=keras.optimizers.Adadelta(),
+                  metrics=['accuracy'])
+    return model
 
-model_atmos.compile(loss=keras.losses.categorical_crossentropy,
-                    optimizer=keras.optimizers.Adadelta(),
-                    metrics=['accuracy'])
 
-model_haze = keras.models.Sequential()
-model_haze.add(keras.layers.Conv2D(32, kernel_size=(3, 3),
-               activation='relu',
-               input_shape=input_shape))
-model_haze.add(keras.layers.Conv2D(64, (3, 3), activation='relu'))
-model_haze.add(keras.layers.MaxPooling2D(pool_size=(2, 2)))
-model_haze.add(keras.layers.Dropout(0.25))
-model_haze.add(keras.layers.Flatten())
-model_haze.add(keras.layers.Dense(128, activation='relu'))
-model_haze.add(keras.layers.Dropout(0.5))
-model_haze.add(keras.layers.Dense(num_classes_landuse, activation='sigmoid'))
+class Modeler(object):
+    outer_batch_size = 512
+    inner_batch_size = 128
+    base_remix_factor = 4
+    haze_remix_factor = base_remix_factor * 8
+    partly_cloudy_remix_factor = base_remix_factor * 4
+    remix_epoch = 2
+    epochs = 170
 
-model_haze.compile(loss=keras.losses.binary_crossentropy,
-                   optimizer=keras.optimizers.Adadelta(),
-                   metrics=['accuracy'])
+    def __init__(self, name, model_f, nc):
+        self.name = name
+        self.model = model_f()
+        self.batch_counter = 0
+        self.epoch_counter = 1
+        self.datagen = self.train_datagen()
+        self.tb_cb = self.tensorboard_cb(self.name)
+        self.cp_cb = self.checkpoint_cb(self.name)
+        self.x_train = np.empty(shape=(self.outer_batch_size, W, H, CHANS), dtype='float32')
+        self.y_train = np.empty(shape=(self.outer_batch_size, nc), dtype='bool')
+        self.class_balance_remix_factor = self.set_class_balance_remix_factor()
 
-model_partly_cloudy = keras.models.Sequential()
-model_partly_cloudy.add(keras.layers.Conv2D(32, kernel_size=(3, 3),
-                        activation='relu',
-                        input_shape=input_shape))
-model_partly_cloudy.add(keras.layers.Conv2D(64, (3, 3), activation='relu'))
-model_partly_cloudy.add(keras.layers.MaxPooling2D(pool_size=(2, 2)))
-model_partly_cloudy.add(keras.layers.Dropout(0.25))
-model_partly_cloudy.add(keras.layers.Flatten())
-model_partly_cloudy.add(keras.layers.Dense(128, activation='relu'))
-model_partly_cloudy.add(keras.layers.Dropout(0.5))
-model_partly_cloudy.add(keras.layers.Dense(num_classes_landuse, activation='sigmoid'))
+    def __repr__(self):
+        return self.name
 
-model_partly_cloudy.compile(loss=keras.losses.binary_crossentropy,
-                            optimizer=keras.optimizers.Adadelta(),
-                            metrics=['accuracy'])
+    def set_class_balance_remix_factor(self):
+        res = 1
+        if self.name == 'clear':
+            res = 2
+        elif self.name == 'partly_cloudy':
+            res = 4
+        elif self.name == 'haze':
+            res = 8
+        return res
 
-model_clear = keras.models.Sequential()
-model_clear.add(keras.layers.Conv2D(32, kernel_size=(3, 3),
-                activation='relu',
-                input_shape=input_shape))
-model_clear.add(keras.layers.Conv2D(64, (3, 3), activation='relu'))
-model_clear.add(keras.layers.MaxPooling2D(pool_size=(2, 2)))
-model_clear.add(keras.layers.Dropout(0.25))
-model_clear.add(keras.layers.Flatten())
-model_clear.add(keras.layers.Dense(128, activation='relu'))
-model_clear.add(keras.layers.Dropout(0.5))
-model_clear.add(keras.layers.Dense(num_classes_landuse, activation='sigmoid'))
+    # Setup tensorboard callbacks
+    def tensorboard_cb(self, model, basepath=DH.basepath):
+        graphdir = basepath + "/graph/" + model
+        return keras.callbacks.TensorBoard(log_dir=graphdir, histogram_freq=0,
+                                           write_graph=True, write_images=True)
 
-model_clear.compile(loss=keras.losses.binary_crossentropy,
-                    optimizer=keras.optimizers.Adadelta(),
-                    metrics=['accuracy'])
+    # Setup model checkpoint callbacks
+    def checkpoint_cb(self, model, basepath=DH.basepath):
+        modeldir = basepath + "/model/" + model
+        cp_fn = "-".join([self.name, "epoch:%s" % self.epoch_counter, "{val_loss:.2f}"]) + ".hdf5"
+        return keras.callbacks.ModelCheckpoint(modeldir + cp_fn, monitor='val_loss',
+                                               verbose=0, save_best_only=False, save_weights_only=False, mode='auto', period=1)
 
-outer_batch_size = 512
-inner_batch_size = 128
-base_remix_factor = 4
-haze_remix_factor = base_remix_factor * 8
-partly_cloudy_remix_factor = base_remix_factor * 4
-remix_epoch = 2
-epochs = 170
+    def train_datagen(self):
+        return keras.preprocessing.image.ImageDataGenerator(
+            rescale=1. / (np.power(2, 16) - 1),
+            shear_range=0.2,
+            zoom_range=0.2,
+            horizontal_flip=True)
 
-for e in range(epochs):
-    print('Epoch', e)
-    train_iter = dh.get_train_iter_preferred_order()  # One pass through the data == epoch
-    x_train_atmos = np.empty(shape=(outer_batch_size, imgwidth, imgheight, numchans), dtype='float32')
-    x_train_clear = np.empty(shape=(outer_batch_size, imgwidth, imgheight, numchans), dtype='float32')
-    x_train_haze = np.empty(shape=(outer_batch_size, imgwidth, imgheight, numchans), dtype='float32')
-    x_train_partly_cloudy = np.empty(shape=(outer_batch_size, imgwidth, imgheight, 4), dtype='float32')
-    y_train_atmos = np.empty(shape=(outer_batch_size, num_classes_atmos), dtype='bool')
-    y_train_landuse_clear = np.empty(shape=(outer_batch_size, num_classes_landuse), dtype='bool')
-    y_train_landuse_haze = np.empty(shape=(outer_batch_size, num_classes_landuse), dtype='bool')
-    y_train_landuse_partly_cloudy = np.empty(shape=(outer_batch_size, num_classes_landuse), dtype='bool')
-    i, ipc, ih, ic = 0, 0, 0, 0
-    for X, Y in train_iter:
-        x_train_atmos[i % outer_batch_size] = X
-        i += 1
-        if Y['cloudy'].all():
-            print(Y['name'].values, 'is cloudy')
-        elif Y['partly_cloudy'].all():
-            print(Y['name'].values, 'is partly cloudy')
-            x_train_partly_cloudy[ipc % outer_batch_size] = X
-            y_train_landuse_partly_cloudy[ipc % outer_batch_size] = Y.loc[:, landuse].as_matrix()[0]
-            ipc += 1
-        elif Y['haze'].all():
-            print(Y['name'].values, 'is haze')
-            x_train_haze[ih % outer_batch_size] = X
-            y_train_landuse_haze[ih % outer_batch_size] = Y.loc[:, landuse].as_matrix()[0]
-            ih += 1
-        elif Y['clear'].all():
-            print(Y['name'].values, 'is clear')
-            x_train_clear[i % outer_batch_size] = X
-            y_train_landuse_clear[ic % outer_batch_size] = Y.loc[:, landuse].as_matrix()[0]
-            ic += 1
-        y_train_atmos[i % outer_batch_size] = Y.loc[:, atmos].as_matrix()[0]
-        if i % outer_batch_size == outer_batch_size - 1:
-            batches = 0
-            for x_batch, y_batch in train_datagen.flow(x_train_atmos, y_train_atmos, batch_size=inner_batch_size):
-                print('Fitting atmos model Batch#', batches)
-                model_atmos.fit(x_batch, y_batch, epochs=remix_epoch, verbose=1,
-                                validation_split=0.2,
-                                callbacks=[tb_cb_model_atmos, mc_cb_model_atmos]
-                                )
-                batches += 1
-                if batches >= outer_batch_size // inner_batch_size * base_remix_factor:
-                    break
-        if ipc % outer_batch_size == outer_batch_size - 1:
-            batches = 0
-            for x_batch, y_batch in train_datagen.flow(x_train_partly_cloudy, y_train_landuse_partly_cloudy, batch_size=inner_batch_size):
-                print('Fitting landuse model for partly coudy atmos Batch#', batches)
-                model_partly_cloudy.fit(x_batch, y_batch, epochs=remix_epoch, verbose=1,
-                                        validation_split=0.2,
-                                        callbacks=[tb_cb_model_partly_cloudy, mc_cb_model_partly_cloudy]
-                                        )
-                batches += 1
-                if batches >= outer_batch_size // inner_batch_size * partly_cloudy_remix_factor:
-                    break
-        if ih % outer_batch_size == outer_batch_size - 1:
-            batches = 0
-            for x_batch, y_batch in train_datagen.flow(x_train_haze, y_train_landuse_haze, batch_size=inner_batch_size):
-                print('Fitting landuse model for haze atmos Batch#', batches)
-                model_haze.fit(x_batch, y_batch, epochs=remix_epoch, verbose=1,
-                               validation_split=0.2,
-                               callbacks=[tb_cb_model_haze, mc_cb_model_haze]
-                               )
-                batches += 1
-                if batches >= outer_batch_size // inner_batch_size * haze_remix_factor:
-                    break
-        if ic % outer_batch_size == outer_batch_size - 1:
-            batches = 0
-            for x_batch, y_batch in train_datagen.flow(x_train_clear, y_train_landuse_clear, batch_size=inner_batch_size):
-                print('Fitting landuse model for clear atmos Batch#', batches)
-                model_clear.fit(x_batch, y_batch, epochs=remix_epoch, verbose=1,
-                                validation_split=0.2,
-                                callbacks=[tb_cb_model_clear, mc_cb_model_clear]
-                                )
-                batches += 1
-                if batches >= outer_batch_size // inner_batch_size * base_remix_factor:
-                    break
+    def set_x_y(self, x, y):
+        self.x_train[self.batch_counter % self.outer_batch_size] = x
+        self.y_train[self.batch_counter % self.outer_batch_size] = y
+        self.batch_counter += 1
+
+    def do_fit(self):
+        return self.batch_counter % self.outer_batch_size == self.outer_batch_size - 1
+
+    def fit_minibatch(self):
+        batches = 0
+        for x_batch, y_batch in self.datagen.flow(self.x_train, self.y_train, self.inner_batch_size):
+            print('Fitting %s model batch %s' % (self.name, batches))
+            self.model.fit(x_batch, y_batch,
+                           epochs=self.remix_epoch,
+                           verbose=0,
+                           validation_split=0.2,
+                           callbacks=[self.tb_cb]
+                           )
+            batches += 1
+            if batches >= self.outer_batch_size // self.inner_batch_size * self.base_remix_factor * self.class_balance_remix_factor:
+                break
+        return
+
+    def checkpoint(self):
+        self.model.fit(self.x_train, self.y_train,
+                       epochs=1,
+                       verbose=1,
+                       validation_split=0.2,
+                       callbacks=[self.tb_cb, self.cp_cb]
+                       )
+        return
+
+
+def main():
+    # Setup models
+    M_atmos = Modeler("atmos", single_label_cnn, len(ATMOS))
+    M_clear = Modeler("clear", multi_label_cnn, len(LANDUSE))
+    M_haze = Modeler("haze", multi_label_cnn, len(LANDUSE))
+    M_partly_cloudy = Modeler("partly-cloudy", multi_label_cnn, len(LANDUSE))
+
+    epochs = 10
+    for e in range(epochs):
+        print('Epoch', e)
+        train_iter = DH.get_train_iter()  # One pass through the data == epoch
+        for X, Y in train_iter:
+            M_atmos.set_x_y(X, Y.loc[:, ATMOS].as_matrix()[0])
+            if Y['cloudy'].all():
+                continue
+            elif Y['partly_cloudy'].all():
+                M_partly_cloudy.set_x_y(X, Y.loc[:, LANDUSE].as_matrix()[0])
+            elif Y['haze'].all():
+                M_haze.set_x_y(X, Y.loc[:, LANDUSE].as_matrix()[0])
+            elif Y['clear'].all():
+                M_clear.set_x_y(X, Y.loc[:, LANDUSE].as_matrix()[0])
+            if M_atmos.do_fit():
+                M_atmos.fit_minibatch()
+            if M_clear.do_fit():
+                M_clear.fit_minibatch()
+            elif M_haze.do_fit():
+                M_haze.fit_minibatch()
+            elif M_partly_cloudy.do_fit():
+                M_partly_cloudy.fit_minibatch()
+        M_atmos.checkpoint()
+        M_atmos.epoch_counter += 1
+        M_clear.checkpoint()
+        M_clear.epoch_counter += 1
+        M_haze.checkpoint()
+        M_haze.epoch_counter += 1
+        M_partly_cloudy.checkpoint()
+        M_partly_cloudy.epoch_counter += 1
+
+if __name__ == '__main__':
+    main()
