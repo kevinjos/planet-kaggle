@@ -22,15 +22,16 @@ def single_label_cnn(nc=len(ATMOS)):
     model = keras.models.Sequential()
     model.add(keras.layers.Conv2D(32, kernel_size=(3, 3),
               activation='relu',
-              input_shape=IMG_SHAPE,
-              name="Conv2D-1"))
-    model.add(keras.layers.Conv2D(64, (3, 3), activation='relu', name="Conv2D-2"))
-    model.add(keras.layers.MaxPooling2D(pool_size=(2, 2), name="MaxPooling2D"))
-    model.add(keras.layers.Dropout(0.25, name="Dropout-1"))
-    model.add(keras.layers.Flatten(name="Flatten"))
-    model.add(keras.layers.Dense(128, activation='relu', name="Dense-relu"))
-    model.add(keras.layers.Dropout(0.5, name="Dropout-2"))
-    model.add(keras.layers.Dense(nc, activation='softmax', name="Dense-softmax"))
+              input_shape=IMG_SHAPE))
+    model.add(keras.layers.Conv2D(64, (3, 3), activation='relu'))
+    # model.add(keras.layers.Conv2D(128, (3, 3), activation='relu'))
+    # model.add(keras.layers.Conv2D(256, (3, 3), activation='relu'))
+    model.add(keras.layers.MaxPooling2D(pool_size=(2, 2)))
+    model.add(keras.layers.Dropout(0.1))
+    model.add(keras.layers.Flatten())
+    model.add(keras.layers.Dense(128, activation='relu'))
+    model.add(keras.layers.Dropout(0.2))
+    model.add(keras.layers.Dense(nc, activation='softmax'))
 
     model.compile(loss=keras.losses.categorical_crossentropy,
                   optimizer=keras.optimizers.Adadelta(),
@@ -42,15 +43,16 @@ def multi_label_cnn(nc=len(LANDUSE)):
     model = keras.models.Sequential()
     model.add(keras.layers.Conv2D(32, kernel_size=(3, 3),
               activation='relu',
-              input_shape=IMG_SHAPE,
-              name="Conv2D-1"))
-    model.add(keras.layers.Conv2D(64, (3, 3), activation='relu', name="Conv2D-2"))
-    model.add(keras.layers.MaxPooling2D(pool_size=(2, 2), name="MaxPooling2D"))
-    model.add(keras.layers.Dropout(0.25, name="Dropout-1"))
-    model.add(keras.layers.Flatten(name="Flatten"))
-    model.add(keras.layers.Dense(128, activation='relu', name="Dense-relu"))
-    model.add(keras.layers.Dropout(0.5, name="Dropout-2"))
-    model.add(keras.layers.Dense(nc, activation='sigmoid', name="Dense-sigmoid"))
+              input_shape=IMG_SHAPE))
+    model.add(keras.layers.Conv2D(64, (3, 3), activation='relu'))
+    # model.add(keras.layers.Conv2D(128, (3, 3), activation='relu'))
+    # model.add(keras.layers.Conv2D(256, (3, 3), activation='relu'))
+    model.add(keras.layers.MaxPooling2D(pool_size=(2, 2)))
+    model.add(keras.layers.Dropout(0.1))
+    model.add(keras.layers.Flatten())
+    model.add(keras.layers.Dense(128, activation='relu'))
+    model.add(keras.layers.Dropout(0.2))
+    model.add(keras.layers.Dense(nc, activation='sigmoid'))
 
     model.compile(loss=keras.losses.binary_crossentropy,
                   optimizer=keras.optimizers.Adadelta(),
@@ -62,7 +64,7 @@ class Modeler(object):
     outer_batch_size = 512
     inner_batch_size = 256
     base_remix_factor = 4
-    remix_epoch = 2
+    remix_epoch = 1
 
     def __init__(self, name, model_f, nc):
         self.name = name
@@ -120,7 +122,7 @@ class Modeler(object):
     def fit_minibatch(self):
         batches = 0
         for x_batch, y_batch in self.datagen.flow(self.x_train, self.y_train, self.inner_batch_size):
-            LOG.info('Fitting %s model batch %s' % (self.name, batches))
+            LOG.info('Fitting %s model batch %s with %s images loaded' % (self.name, batches, self.batch_counter))
             self.model.fit(x_batch, y_batch,
                            epochs=self.remix_epoch,
                            verbose=2,
@@ -134,13 +136,24 @@ class Modeler(object):
 
     def checkpoint(self):
         LOG.info("Saving model checkpoint for [%s]" % self.name)
-        self.model.fit(self.x_train, self.y_train,
-                       epochs=1,
-                       verbose=0,
-                       validation_split=0.2,
-                       callbacks=[self.tb_cb, self.cp_cb]
-                       )
+        cp_fn = "-".join([self.name, "epoch:%s" % self.epoch_counter]) + ".hdf5"
+        keras.models.save_model(self.model, DH.basepath + "/model/" + cp_fn)
         return
+
+
+def test_model_serialization(m, basepath=DH.basepath):
+    modeldir = basepath + "/model/"
+    cp_fn = "test-serialization.hdf5"
+    keras.models.save_model(m, modeldir + cp_fn)
+    m_load = keras.models.load_model(modeldir + cp_fn)
+    m_load_weights = m_load.get_weights()
+    m_saved_weights = m.get_weights()
+    assert len(m_load_weights) == len(m_saved_weights)
+    for i in range(len(m_saved_weights)):
+        LOG.info(m_load_weights[i].shape)
+        LOG.info(m_saved_weights[i].shape)
+        assert np.array_equal(m_load_weights[i], m_saved_weights[i])
+    LOG.info("Serialization test passed")
 
 
 def main():
@@ -155,23 +168,26 @@ def main():
         LOG.info('Epoch %s' % e)
         train_iter = DH.get_train_iter()  # One pass through the data == epoch
         for X, Y in train_iter:
+            # Training an atmospheric model
             M_atmos.set_x_y(X, Y.loc[:, ATMOS].as_matrix()[0])
+            if M_atmos.do_fit():
+                M_atmos.fit_minibatch()
+
+            # Trainging landuse models for various atmospheric conditions
             if Y['cloudy'].all():
                 continue
             elif Y['partly_cloudy'].all():
                 M_partly_cloudy.set_x_y(X, Y.loc[:, LANDUSE].as_matrix()[0])
+                if M_partly_cloudy.do_fit():
+                    M_partly_cloudy.fit_minibatch()
             elif Y['haze'].all():
                 M_haze.set_x_y(X, Y.loc[:, LANDUSE].as_matrix()[0])
+                if M_haze.do_fit():
+                    M_haze.fit_minibatch()
             elif Y['clear'].all():
                 M_clear.set_x_y(X, Y.loc[:, LANDUSE].as_matrix()[0])
-            if M_atmos.do_fit():
-                M_atmos.fit_minibatch()
-            if M_clear.do_fit():
-                M_clear.fit_minibatch()
-            elif M_haze.do_fit():
-                M_haze.fit_minibatch()
-            elif M_partly_cloudy.do_fit():
-                M_partly_cloudy.fit_minibatch()
+                if M_clear.do_fit():
+                    M_clear.fit_minibatch()
         M_atmos.checkpoint()
         M_atmos.epoch_counter += 1
         M_clear.checkpoint()
