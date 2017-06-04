@@ -9,7 +9,7 @@ class FileHandler(object):
     def __init__(self, basepath="/Users/kjs/repos/planet"):
         # Directories
         self.basepath = basepath
-        self.path = basepath + "/data/v2"
+        self.path = basepath + "/input"
         self.train_tif = "train-tif-v2"
         self.train_jpg = "train-jpg"
         self.validation_jpg = "validation-jpg"
@@ -62,8 +62,8 @@ class FileHandler(object):
 
 
 class DataHandler(FileHandler):
-    def __init__(self):
-        super(DataHandler, self).__init__()
+    def __init__(self, **kwargs):
+        super(DataHandler, self).__init__(**kwargs)
         self.train_labels = None
 
     def set_train_labels(self):
@@ -86,20 +86,6 @@ class DataHandler(FileHandler):
 
     def get_train_iter(self):
         train_iter = self._get_tif_iter("train")
-        for name, d in train_iter:
-            Y = self.train_labels.loc[self.train_labels["name"] == name]
-            X = d
-            yield (X, Y)
-
-    def preferred_fns(self):
-        sorteddf = self.train_labels.sort_values(["artisinal_mine", "blooming", "blow_down",
-                                                  "slash_burn", "conventional_mine", "bare_ground",
-                                                  "selective_logging"], ascending=False)
-        return sorteddf["name"]
-
-    def get_train_iter_preferred_order(self):
-        fns = self.preferred_fns()
-        train_iter = self._get_train_tif_iter(fns)
         for name, d in train_iter:
             Y = self.train_labels.loc[self.train_labels["name"] == name]
             X = d

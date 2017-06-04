@@ -1,7 +1,8 @@
-from __future__ import print_function
 import tensorflow.contrib.keras as keras
 from tensorflow.contrib.keras import backend as K
 import numpy as np
+import logging
+import sys
 
 from planetutils import DataHandler
 
@@ -59,12 +60,9 @@ def multi_label_cnn(nc=len(LANDUSE)):
 
 class Modeler(object):
     outer_batch_size = 512
-    inner_batch_size = 128
+    inner_batch_size = 256
     base_remix_factor = 4
-    haze_remix_factor = base_remix_factor * 8
-    partly_cloudy_remix_factor = base_remix_factor * 4
     remix_epoch = 2
-    epochs = 170
 
     def __init__(self, name, model_f, nc):
         self.name = name
@@ -122,10 +120,10 @@ class Modeler(object):
     def fit_minibatch(self):
         batches = 0
         for x_batch, y_batch in self.datagen.flow(self.x_train, self.y_train, self.inner_batch_size):
-            print('Fitting %s model batch %s' % (self.name, batches))
+            LOG.info('Fitting %s model batch %s' % (self.name, batches))
             self.model.fit(x_batch, y_batch,
                            epochs=self.remix_epoch,
-                           verbose=0,
+                           verbose=2,
                            validation_split=0.2,
                            callbacks=[self.tb_cb]
                            )
@@ -135,9 +133,10 @@ class Modeler(object):
         return
 
     def checkpoint(self):
+        LOG.info("Saving model checkpoint for [%s]" % self.name)
         self.model.fit(self.x_train, self.y_train,
                        epochs=1,
-                       verbose=1,
+                       verbose=0,
                        validation_split=0.2,
                        callbacks=[self.tb_cb, self.cp_cb]
                        )
@@ -153,7 +152,7 @@ def main():
 
     epochs = 10
     for e in range(epochs):
-        print('Epoch', e)
+        LOG.info('Epoch %s' % e)
         train_iter = DH.get_train_iter()  # One pass through the data == epoch
         for X, Y in train_iter:
             M_atmos.set_x_y(X, Y.loc[:, ATMOS].as_matrix()[0])
@@ -182,5 +181,29 @@ def main():
         M_partly_cloudy.checkpoint()
         M_partly_cloudy.epoch_counter += 1
 
+
+class StreamToLogger(object):
+    """
+    Fake file-like stream object that redirects writes to a logger instance.
+    """
+    def __init__(self, logger, log_level=logging.INFO):
+        self.logger = logger
+        self.log_level = log_level
+        self.linebuf = ''
+
+    def write(self, buf):
+        for line in buf.rstrip().splitlines():
+            self.logger.log(self.log_level, line.rstrip())
+
 if __name__ == '__main__':
+    LOG = logging.getLogger(__name__)
+    LOG.setLevel(logging.INFO)
+    logfile = DH.basepath + "/log/" + "planet-kaggle-cnn-v2.log"
+    handler = logging.FileHandler(logfile)
+    formatter = logging.Formatter('[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s')
+    handler.setFormatter(formatter)
+    LOG.addHandler(handler)
+    LOG.info("Starting training run")
+    sys.stdout = StreamToLogger(LOG)
+    sys.stderr = sys.stdout
     main()
