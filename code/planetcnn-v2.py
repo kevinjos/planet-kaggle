@@ -1,5 +1,6 @@
 import tensorflow.contrib.keras as keras
 from tensorflow.contrib.keras import backend as K
+import tensorflow as tf
 import numpy as np
 import logging
 import sys
@@ -20,14 +21,27 @@ IMG_SHAPE = (W, H, CHANS)
 
 def single_label_cnn(nc=len(ATMOS)):
     model = keras.models.Sequential()
-    model.add(keras.layers.Conv2D(32, kernel_size=(3, 3),
+    model.add(keras.layers.Conv2D(
+              filters=32,
+              kernel_size=(8, 8),
+              strides=1,
+              padding='valid',
               activation='relu',
               input_shape=IMG_SHAPE))
-    model.add(keras.layers.Conv2D(64, (3, 3), activation='relu'))
-    # model.add(keras.layers.Conv2D(128, (3, 3), activation='relu'))
-    # model.add(keras.layers.Conv2D(256, (3, 3), activation='relu'))
+    model.add(keras.layers.Conv2D(
+              filters=64,
+              kernel_size=(8, 8),
+              strides=1,
+              padding='valid',
+              activation='relu'))
     model.add(keras.layers.MaxPooling2D(pool_size=(2, 2)))
     model.add(keras.layers.Dropout(0.1))
+    model.add(keras.layers.Conv2D(
+              filters=128,
+              kernel_size=(8, 8),
+              strides=1,
+              padding='valid',
+              activation='relu'))
     model.add(keras.layers.Flatten())
     model.add(keras.layers.Dense(128, activation='relu'))
     model.add(keras.layers.Dropout(0.2))
@@ -41,14 +55,27 @@ def single_label_cnn(nc=len(ATMOS)):
 
 def multi_label_cnn(nc=len(LANDUSE)):
     model = keras.models.Sequential()
-    model.add(keras.layers.Conv2D(32, kernel_size=(3, 3),
+    model.add(keras.layers.Conv2D(
+              filters=32,
+              kernel_size=(8, 8),
+              strides=1,
+              padding='valid',
               activation='relu',
               input_shape=IMG_SHAPE))
-    model.add(keras.layers.Conv2D(64, (3, 3), activation='relu'))
-    # model.add(keras.layers.Conv2D(128, (3, 3), activation='relu'))
-    # model.add(keras.layers.Conv2D(256, (3, 3), activation='relu'))
+    model.add(keras.layers.Conv2D(
+              filters=64,
+              kernel_size=(8, 8),
+              activation='relu',
+              strides=1,
+              padding='valid'))
     model.add(keras.layers.MaxPooling2D(pool_size=(2, 2)))
     model.add(keras.layers.Dropout(0.1))
+    model.add(keras.layers.Conv2D(
+              filters=128,
+              kernel_size=(8, 8),
+              strides=1,
+              padding='valid',
+              activation='relu'))
     model.add(keras.layers.Flatten())
     model.add(keras.layers.Dense(128, activation='relu'))
     model.add(keras.layers.Dropout(0.2))
@@ -129,6 +156,7 @@ class Modeler(object):
                            validation_split=0.2,
                            callbacks=[self.tb_cb]
                            )
+            # self.model = test_model_serialization(self.model)
             batches += 1
             if batches >= self.outer_batch_size // self.inner_batch_size * self.base_remix_factor * self.class_balance_remix_factor:
                 break
@@ -144,16 +172,18 @@ class Modeler(object):
 def test_model_serialization(m, basepath=DH.basepath):
     modeldir = basepath + "/model/"
     cp_fn = "test-serialization.hdf5"
+    m_saved_weights = m.get_weights()
     keras.models.save_model(m, modeldir + cp_fn)
+    K.clear_session()
     m_load = keras.models.load_model(modeldir + cp_fn)
     m_load_weights = m_load.get_weights()
-    m_saved_weights = m.get_weights()
     assert len(m_load_weights) == len(m_saved_weights)
     for i in range(len(m_saved_weights)):
         LOG.info(m_load_weights[i].shape)
         LOG.info(m_saved_weights[i].shape)
         assert np.array_equal(m_load_weights[i], m_saved_weights[i])
     LOG.info("Serialization test passed")
+    return m_load
 
 
 def main():
