@@ -4,3 +4,6 @@
 /data
 /input
 /log
+/output
+/model-archive
+/.DS_Store

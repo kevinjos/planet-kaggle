@@ -4,18 +4,20 @@ import tensorflow as tf
 import numpy as np
 import logging
 import sys
+import argparse
 
 from planetutils import DataHandler
 
 
 DH = DataHandler()
 DH.set_train_labels()
-ATMOS = ['cloudy', 'partly_cloudy', 'haze', 'clear']
-LANDUSE = ['artisinal_mine', 'blooming', 'blow_down', 'agriculture', 'bare_ground',
-           'primary', 'road', 'selective_logging', 'slash_burn', 'water',
-           'conventional_mine', 'cultivation', 'habitation']
+ATMOS = ['clear', 'partly_cloudy', 'haze', 'cloudy']
+ATMOS_W = [1, 2, 4, 4]
+LANDUSE = ['primary', 'agriculture', 'road', 'water', 'cultivation', 'habitation', 'bare_ground',
+           'artisinal_mine', 'blooming', 'blow_down', 'selective_logging', 'slash_burn', 'conventional_mine']
+LANDUSE_W = [1, 2, 2, 2, 4, 4, 8, 8, 8, 8, 8, 8, 8]
 
-W, H, CHANS = 256, 256, 4
+H, W, CHANS = 32, 32, 4
 IMG_SHAPE = (W, H, CHANS)
 
 
@@ -36,12 +38,6 @@ def single_label_cnn(nc=len(ATMOS)):
               activation='relu'))
     model.add(keras.layers.MaxPooling2D(pool_size=(2, 2)))
     model.add(keras.layers.Dropout(0.1))
-    model.add(keras.layers.Conv2D(
-              filters=128,
-              kernel_size=(8, 8),
-              strides=1,
-              padding='valid',
-              activation='relu'))
     model.add(keras.layers.Flatten())
     model.add(keras.layers.Dense(128, activation='relu'))
     model.add(keras.layers.Dropout(0.2))
@@ -70,34 +66,31 @@ def multi_label_cnn(nc=len(LANDUSE)):
               padding='valid'))
     model.add(keras.layers.MaxPooling2D(pool_size=(2, 2)))
     model.add(keras.layers.Dropout(0.1))
-    model.add(keras.layers.Conv2D(
-              filters=128,
-              kernel_size=(8, 8),
-              strides=1,
-              padding='valid',
-              activation='relu'))
     model.add(keras.layers.Flatten())
     model.add(keras.layers.Dense(128, activation='relu'))
     model.add(keras.layers.Dropout(0.2))
     model.add(keras.layers.Dense(nc, activation='sigmoid'))
 
     model.compile(loss=keras.losses.binary_crossentropy,
-                  optimizer=keras.optimizers.Adadelta(),
+                  optimizer='adam',
                   metrics=['accuracy'])
     return model
 
 
 class Modeler(object):
-    outer_batch_size = 512
-    inner_batch_size = 256
+    outer_batch_size = 8192
+    inner_batch_size = 4096
+    mini_batch_size = 32
     base_remix_factor = 4
     remix_epoch = 1
 
-    def __init__(self, name, model_f, nc):
+    def __init__(self, name, model_f, nc, cw):
         self.name = name
         self.model = model_f()
         self.batch_counter = 0
+        self.batch_counter_lag_one = -1
         self.epoch_counter = 1
+        self.class_weight = cw
         self.datagen = self.train_datagen()
         self.tb_cb = self.tensorboard_cb(self.name)
         self.cp_cb = self.checkpoint_cb(self.name)
@@ -122,7 +115,7 @@ class Modeler(object):
     def tensorboard_cb(self, model, basepath=DH.basepath):
         graphdir = basepath + "/graph/" + model
         return keras.callbacks.TensorBoard(log_dir=graphdir, histogram_freq=0,
-                                           write_graph=True, write_images=True)
+                                           write_graph=False, write_images=False)
 
     # Setup model checkpoint callbacks
     def checkpoint_cb(self, model, basepath=DH.basepath):
@@ -133,34 +126,43 @@ class Modeler(object):
 
     def train_datagen(self):
         return keras.preprocessing.image.ImageDataGenerator(
-            rescale=1. / (np.power(2, 16) - 1),
             shear_range=0.2,
             zoom_range=0.2,
             horizontal_flip=True)
 
     def set_x_y(self, x, y):
-        self.x_train[self.batch_counter % self.outer_batch_size] = x
+        self.x_train[self.batch_counter % self.outer_batch_size] = x / (np.pow(2, 16) - 1.)
         self.y_train[self.batch_counter % self.outer_batch_size] = y
         self.batch_counter += 1
+        self.batch_counter_lag_one += 1
 
     def do_fit(self):
-        return self.batch_counter % self.outer_batch_size == self.outer_batch_size - 1
+        return self.batch_counter_lag_one % self.outer_batch_size == self.outer_batch_size - 1
 
-    def fit_minibatch(self):
+    def fit_minibatch_with_datagen(self):
         batches = 0
         for x_batch, y_batch in self.datagen.flow(self.x_train, self.y_train, self.inner_batch_size):
-            LOG.info('Fitting %s model batch %s with %s images loaded' % (self.name, batches, self.batch_counter))
-            self.model.fit(x_batch, y_batch,
-                           epochs=self.remix_epoch,
-                           verbose=2,
-                           validation_split=0.2,
-                           callbacks=[self.tb_cb]
-                           )
-            # self.model = test_model_serialization(self.model)
+            self.fit(x_batch, y_batch)
             batches += 1
             if batches >= self.outer_batch_size // self.inner_batch_size * self.base_remix_factor * self.class_balance_remix_factor:
                 break
         return
+
+    def fit_minibatch(self):
+        self.fit(self.x_train, self.y_train)
+        return
+
+    def fit(self, x, y):
+        LOG.info('Fitting %s model: %s total images examined after %s epochs' % (self.name, self.batch_counter + 1, self.epoch_counter))
+        self.model.fit(x, y,
+                       epochs=self.remix_epoch,
+                       verbose=2,
+                       validation_split=0.2,
+                       # class_weight=self.class_weight,
+                       shuffle=False,
+                       batch_size=self.mini_batch_size,
+                       callbacks=[self.tb_cb]
+                       )
 
     def checkpoint(self):
         LOG.info("Saving model checkpoint for [%s]" % self.name)
@@ -187,16 +189,10 @@ def test_model_serialization(m, basepath=DH.basepath):
 
 
 def main():
-    # Setup models
-    M_atmos = Modeler("atmos", single_label_cnn, len(ATMOS))
-    M_clear = Modeler("clear", multi_label_cnn, len(LANDUSE))
-    M_haze = Modeler("haze", multi_label_cnn, len(LANDUSE))
-    M_partly_cloudy = Modeler("partly-cloudy", multi_label_cnn, len(LANDUSE))
-
     epochs = 10
     for e in range(epochs):
         LOG.info('Epoch %s' % e)
-        train_iter = DH.get_train_iter()  # One pass through the data == epoch
+        train_iter = DH.get_train_iter(h=H, w=W)  # One pass through the data == epoch
         for X, Y in train_iter:
             # Training an atmospheric model
             M_atmos.set_x_y(X, Y.loc[:, ATMOS].as_matrix()[0])
@@ -252,4 +248,23 @@ if __name__ == '__main__':
     LOG.info("Starting training run")
     sys.stdout = StreamToLogger(LOG)
     sys.stderr = sys.stdout
-    main()
+
+    # Argument parsing
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--checkpoint-on-interrupt', action='store_true')
+    args = parser.parse_args()
+
+    # Setup models
+    M_atmos = Modeler("atmos", single_label_cnn, len(ATMOS), ATMOS_W)
+    M_clear = Modeler("clear", multi_label_cnn, len(LANDUSE), ATMOS_W)
+    M_haze = Modeler("haze", multi_label_cnn, len(LANDUSE), ATMOS_W)
+    M_partly_cloudy = Modeler("partly-cloudy", multi_label_cnn, len(LANDUSE), ATMOS_W)
+
+    try:
+        main()
+    except KeyboardInterrupt:
+        if args.checkpoint_on_interrupt:
+            M_atmos.checkpoint()
+            M_clear.checkpoint()
+            M_haze.checkpoint()
+            M_partly_cloudy.checkpoint()
