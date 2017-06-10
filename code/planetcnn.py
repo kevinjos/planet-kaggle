@@ -198,23 +198,25 @@ def main():
     M = Modeler(name, multi_label_cnn, len(ATMOS) + len(LANDUSE), ATMOS_W + LANDUSE_W)
     submission = "%s.csv" % name
     if args.train:
+        LOG.info("Starting training run")
+        for X, Y in DH.get_train_iter(h=H, w=W):
+            M.set_x_y(X, Y.loc[:, ATMOS + LANDUSE].as_matrix()[0])
+        epochs = 50
         try:
-            for X, Y in DH.get_train_iter(h=H, w=W):
-                M.set_x_y(X, Y.loc[:, ATMOS + LANDUSE].as_matrix()[0])
-            epochs = 5
             M.fit_full_datagen(epochs=epochs)
             thresh = calc_thresh(M.model)
             write_submission("/output/%s" % submission, M.model, thresh)
         except KeyboardInterrupt:
             LOG.info("Stopping training and checkpointing the model")
             M.checkpoint()
-
-    if args.test:
+            thresh = calc_thresh(M.model)
+            write_submission("/output/%s" % submission, M.model, thresh)
+    elif args.test:
         m = load_model()
         thresh = calc_thresh(m)
         write_submission("/output/%s" % submission, m, thresh)
 
-    if args.thresh:
+    elif args.thresh:
         m = load_model()
         calc_thresh(m)
 
@@ -240,7 +242,6 @@ if __name__ == '__main__':
     formatter = logging.Formatter('[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s')
     handler.setFormatter(formatter)
     LOG.addHandler(handler)
-    LOG.info("Starting training run")
     sys.stdout = StreamToLogger(LOG)
     sys.stderr = sys.stdout
 
@@ -251,3 +252,4 @@ if __name__ == '__main__':
     parser.add_argument('--train', action='store_true')
     parser.add_argument('--thresh', action='store_true')
     args = parser.parse_args()
+    main()
