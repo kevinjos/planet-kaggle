@@ -14,7 +14,7 @@ class FileHandler(object):
         self.train_jpg = "train-jpg"
         self.validation_jpg = "validation-jpg"
         self.test_tif = "test-tif-v2"
-        self.test_jpg = "test-jpg"
+        self.test_jpg = "test-jpg-v2"
         # Files
         self.train_labels_csv = "train_v2.csv"
         # Data
@@ -35,55 +35,27 @@ class FileHandler(object):
         self._train_labels = res
         return
 
-    def set_train_cache(self, h, w):
-        path = self.path + "/" + self.train_tif
+    def _get_iter(self, samp, imgtyp="tif", h=256, w=256, maxn=None):
+        expected_samp = ("train", "test")
+        expected_imgtyp = ("jpg", "tif")
+        path = self.path + "/"
+        if samp not in expected_samp or imgtyp not in expected_imgtyp:
+            raise NameError(samp, "%s found but expected string in %s or %s" % (samp, expected_samp, expected_imgtyp))
+        elif samp == "train" and imgtyp == "tif":
+            path += self.train_tif
+        elif samp == "train" and imgtyp == "jpg":
+            path += self.train_jpg
+        elif samp == "test" and imgtyp == "tif":
+            path = self.basepath + "/data/v2/" + self.test_tif
+        elif samp == "test" and imgtyp == "jpg":
+            path = self.basepath + "/data/v2/" + self.test_jpg
         files = os.listdir(path)
         random.shuffle(files)
-        self._set_train_cache(path, files, h, w)
-
-    def _set_train_cache(self, path, files, h, w):
-        for fn in files:
+        for fn in files[:maxn]:
             name = fn.split(".")[0]
             img = cv2.imread(path + "/" + fn, -1)
             img = cv2.resize(img, (h, w))
-            self.train_cache[name] = img
-        self._train_cached = True
-        return
-
-    def _get_tif_iter(self, samp, h=256, w=256, do_cache=False):
-        expected = ("train", "test")
-        path = self.path + "/"
-        if samp not in expected:
-            raise NameError(samp, "%s found but expected string in %s" % (samp, expected))
-        elif samp == "train":
-            path += self.train_tif
-        elif samp == "test":
-            path = self.basepath + "/data/v2/" + self.test_tif
-        files = os.listdir(path)
-        random.shuffle(files)
-        if do_cache and not self._train_cached:
-            self._set_train_cache(path, files, h, w)
-        if not do_cache:
-            for fn in files:
-                name = fn.split(".")[0]
-                img = cv2.imread(path + "/" + fn, -1)
-                img = cv2.resize(img, (h, w))
-                yield((name, img))
-        else:
-            for name, img in self.train_cache.iteritems():
-                yield((name, img))
-
-    def get_tif(self, name, h=256, w=256):
-        path = self.path + "/" + self.train_tif + "/" + name
-        img = cv2.imread(path, -1)
-        img = cv2.resize(img, (h, w))
-        return img
-
-    def get_train_jpg_path(self):
-        return self.path + "/" + self.train_jpg
-
-    def get_validation_jpg_path(self):
-        return self.path + "/" + self.validation_jpg
+            yield((name, img))
 
 
 class DataHandler(FileHandler):
@@ -109,20 +81,12 @@ class DataHandler(FileHandler):
         pd_encoded = pd.DataFrame(pd_encoded)
         self.train_labels = pd_encoded
 
-    def get_train_iter(self, h=256, w=256):
-        train_iter = self._get_tif_iter("train", h, w)
-        for name, d in train_iter:
+    def get_train_iter(self, imgtyp="tif", h=256, w=256, maxn=None):
+        train_iter = self._get_iter("train", imgtyp=imgtyp, h=h, w=w, maxn=maxn)
+        for name, X in train_iter:
             Y = self.train_labels.loc[self.train_labels["name"] == name]
-            X = d
             yield (X, Y)
 
-    def get_test_iter(self, h=256, w=256):
-        test_iter = self._get_tif_iter("test", h, w)
+    def get_test_iter(self, imgtyp="tif", h=256, w=256, maxn=None):
+        test_iter = self._get_iter("test", imgtyp=imgtyp, h=h, w=w, maxn=maxn)
         return test_iter
-
-    def get_manual_train_iter(self, h=256, w=256):
-        train_iter = self._get_tif_iter("train", h, w)
-        for name, d in train_iter:
-            Y = self.train_labels.loc[self.train_labels["name"] == name]
-            X = d
-            yield (name, X, Y)

@@ -6,6 +6,7 @@ from sklearn.metrics import fbeta_score
 
 import logging
 import sys
+import os
 import argparse
 
 from planetutils import DataHandler
@@ -17,14 +18,65 @@ LANDUSE = ['primary', 'agriculture', 'road', 'water', 'cultivation', 'habitation
            'artisinal_mine', 'blooming', 'blow_down', 'selective_logging', 'slash_burn', 'conventional_mine']
 LANDUSE_W = [1, 2, 2, 2, 4, 4, 8, 8, 8, 8, 8, 8, 8]
 
-H, W, CHANS = 64, 64, 4
+H, W, CHANS = 64, 64, 3
 IMG_SHAPE = (W, H, CHANS)
 
 DH = DataHandler()
 DH.set_train_labels()
 
+SAMPLES = 100
+if SAMPLES is None:
+    SAMPLES = DH.train_labels.shape[0]
 
-def multi_label_cnn(nc=len(LANDUSE)):
+
+def unet(nc):
+    inputs = keras.layers.Input((H, W, CHANS))
+    conv1 = keras.layers.Conv2D(32, (3, 3), activation='relu', padding='same')(inputs)
+    conv1 = keras.layers.Conv2D(32, (3, 3), activation='relu', padding='same')(conv1)
+    pool1 = keras.layers.MaxPooling2D(pool_size=(2, 2))(conv1)
+
+    conv2 = keras.layers.Conv2D(64, (3, 3), activation='relu', padding='same')(pool1)
+    conv2 = keras.layers.Conv2D(64, (3, 3), activation='relu', padding='same')(conv2)
+    pool2 = keras.layers.MaxPooling2D(pool_size=(2, 2))(conv2)
+
+    conv3 = keras.layers.Conv2D(128, (3, 3), activation='relu', padding='same')(pool2)
+    conv3 = keras.layers.Conv2D(128, (3, 3), activation='relu', padding='same')(conv3)
+    pool3 = keras.layers.MaxPooling2D(pool_size=(2, 2))(conv3)
+
+    conv4 = keras.layers.Conv2D(256, (3, 3), activation='relu', padding='same')(pool3)
+    conv4 = keras.layers.Conv2D(256, (3, 3), activation='relu', padding='same')(conv4)
+    pool4 = keras.layers.MaxPooling2D(pool_size=(2, 2))(conv4)
+
+    conv5 = keras.layers.Conv2D(512, (3, 3), activation='relu', padding='same')(pool4)
+    conv5 = keras.layers.Conv2D(512, (3, 3), activation='relu', padding='same')(conv5)
+
+    up6 = keras.layers.concatenate([keras.layers.Conv2DTranspose(256, (2, 2), strides=(2, 2), padding='same')(conv5), conv4], axis=3)
+    conv6 = keras.layers.Conv2D(256, (3, 3), activation='relu', padding='same')(up6)
+    conv6 = keras.layers.Conv2D(256, (3, 3), activation='relu', padding='same')(conv6)
+
+    up7 = keras.layers.concatenate([keras.layers.Conv2DTranspose(128, (2, 2), strides=(2, 2), padding='same')(conv6), conv3], axis=3)
+    conv7 = keras.layers.Conv2D(128, (3, 3), activation='relu', padding='same')(up7)
+    conv7 = keras.layers.Conv2D(128, (3, 3), activation='relu', padding='same')(conv7)
+
+    up8 = keras.layers.concatenate([keras.layers.Conv2DTranspose(64, (2, 2), strides=(2, 2), padding='same')(conv7), conv2], axis=3)
+    conv8 = keras.layers.Conv2D(64, (3, 3), activation='relu', padding='same')(up8)
+    conv8 = keras.layers.Conv2D(64, (3, 3), activation='relu', padding='same')(conv8)
+
+    up9 = keras.layers.concatenate([keras.layers.Conv2DTranspose(32, (2, 2), strides=(2, 2), padding='same')(conv8), conv1], axis=3)
+    conv9 = keras.layers.Conv2D(32, (3, 3), activation='relu', padding='same')(up9)
+    conv9 = keras.layers.Conv2D(32, (3, 3), activation='relu', padding='same')(conv9)
+
+    flat = keras.layers.Flatten()(conv9)
+    dense = keras.layers.Dense(nc, activation='sigmoid')(flat)
+
+    model = keras.models.Model(inputs=[inputs], outputs=[dense])
+
+    model.compile(optimizer=keras.optimizers.Adam(lr=1e-5), loss=keras.losses.binary_crossentropy)
+
+    return model
+
+
+def multi_label_cnn(nc):
     model = keras.models.Sequential()
     model.add(keras.layers.Conv2D(
               filters=32,
@@ -47,21 +99,20 @@ def multi_label_cnn(nc=len(LANDUSE)):
     model.add(keras.layers.Dense(nc, activation='sigmoid'))
 
     model.compile(loss=keras.losses.binary_crossentropy,
-                  optimizer='adam',
-                  metrics=['accuracy'])
+                  optimizer='adam')
     return model
 
 
 class Modeler(object):
-    sample_num = 40479
 
-    def __init__(self, name, model_f, nc, cw):
+    def __init__(self, name, model_f, nc, cw, sample_num):
         self.name = name
         self.model = model_f(nc=nc)
         self.class_weight = cw
+        self.sample_num = sample_num
         self.datagen = self.train_datagen()
-        self.tb_cb = self.tensorboard_cb(self.name)
-        self.cp_cb = self.checkpoint_cb(self.name)
+        self.tb_cb = self.tensorboard_cb()
+        self.cp_cb = self.checkpoint_cb()
         self.x_train = np.empty(shape=(self.sample_num, W, H, CHANS), dtype='float32')
         self.y_train = np.empty(shape=(self.sample_num, nc), dtype='bool')
         self.sample_counter = 0
@@ -70,23 +121,24 @@ class Modeler(object):
         return self.name
 
     # Setup tensorboard callbacks
-    def tensorboard_cb(self, model, basepath=DH.basepath):
-        graphdir = basepath + "/graph/" + model
+    def tensorboard_cb(self, basepath=DH.basepath):
+        graphdir = basepath + "/graph/" + self.name + "/"
+        mkdir(graphdir)
         return keras.callbacks.TensorBoard(log_dir=graphdir,
                                            histogram_freq=0,
                                            write_graph=False,
                                            write_images=False)
 
     # Setup model checkpoint callbacks
-    def checkpoint_cb(self, model, basepath=DH.basepath):
-        modeldir = basepath + "/model/"
-        cp_fn = "-".join([self.name, "{epoch:02d}-{val_loss:.2f}"]) + ".hdf5"
+    def checkpoint_cb(self, basepath=DH.basepath):
+        modeldir = basepath + "/model/" + self.name + "/"
+        mkdir(modeldir)
+        cp_fn = "{epoch:03d}-{val_loss:.5f}.hdf5"
         return keras.callbacks.ModelCheckpoint(modeldir + cp_fn, monitor='val_loss',
-                                               verbose=1,
                                                save_best_only=False,
                                                save_weights_only=False,
                                                mode='auto',
-                                               period=2)
+                                               period=1)
 
     def train_datagen(self):
         return keras.preprocessing.image.ImageDataGenerator(
@@ -126,7 +178,9 @@ class Modeler(object):
         return
 
 
-def load_model(mfn="20170607-all/all-297-0.15.hdf5"):
+def load_model(mfn):
+    mfn += ".hdf5"
+    keras.backend.manual_variable_initialization(True)
     path = DH.basepath + "/model-archive/" + mfn
     M = keras.models.load_model(path)
     return M
@@ -164,61 +218,62 @@ def get_optimal_threshhold(true_label, prediction, iterations=100):
     return best_threshhold
 
 
-def calc_thresh(m):
+def calc_thresh(m, imgtyp):
     LOG.info("Optimizing thresholds")
     true_label, p = [], []
-    i = 0
-    for X, Y in DH.get_train_iter(h=H, w=W):
+    for X, Y in DH.get_train_iter(imgtyp=imgtyp, h=H, w=W, maxn=SAMPLES // 5):
         Y = Y.loc[:, ATMOS + LANDUSE].as_matrix()[0]
         true_label.append(list(Y))
         X = X / (np.power(2, 16) - 1.)
         pred = m.predict(np.array([X]))
         p.append(list(pred[0]))
-        i += 1
-        if i % 1000 == 0:
-            LOG.info("%s samples predicted" % i)
-        if i == 20000:
-            break
     t = get_optimal_threshhold(np.array(true_label), np.array(p))
     LOG.info("Best thresholds for %s are %s" % (ATMOS + LANDUSE, t))
     return t
 
 
-def write_submission(outputpath, m, thresh):
+def write_submission(outputpath, m, thresh, imgtyp):
+    maxn = None if SAMPLES > 10000 else 100
     with open(DH.basepath + outputpath, "w") as fp:
         fp.write("image_name,tags\n")
-        for name, X in DH.get_test_iter(h=H, w=W):
+        for name, X in DH.get_test_iter(imgtyp=imgtyp, h=H, w=W, maxn=maxn):
             X = X / (np.power(2, 16) - 1.)
             p = prediction(m, X, thresh)
             fp.write("%s,%s\n" % (name, p))
 
 
+def mkdir(d):
+    if not os.path.exists(d):
+        os.mkdir(d)
+
+
 def main():
-    name = "64x64-32-5x5-64-5x5"
-    M = Modeler(name, multi_label_cnn, len(ATMOS) + len(LANDUSE), ATMOS_W + LANDUSE_W)
+    # name = "64x64-32-5x5-64-5x5-jpg"
+    name = "base-unet-jpg"
+    imgtyp = "jpg"
+    M = Modeler(name, unet, len(ATMOS) + len(LANDUSE), ATMOS_W + LANDUSE_W, SAMPLES)
     submission = "%s.csv" % name
     if args.train:
         LOG.info("Starting training run")
-        for X, Y in DH.get_train_iter(h=H, w=W):
+        for X, Y in DH.get_train_iter(imgtyp=imgtyp, h=H, w=W, maxn=SAMPLES):
             M.set_x_y(X, Y.loc[:, ATMOS + LANDUSE].as_matrix()[0])
         epochs = 50
         try:
             M.fit_full_datagen(epochs=epochs)
-            thresh = calc_thresh(M.model)
-            write_submission("/output/%s" % submission, M.model, thresh)
+            thresh = calc_thresh(M.model, imgtyp)
+            write_submission("/output/%s" % submission, M.model, thresh, imgtyp)
         except KeyboardInterrupt:
             LOG.info("Stopping training and checkpointing the model")
             M.checkpoint()
-            thresh = calc_thresh(M.model)
-            write_submission("/output/%s" % submission, M.model, thresh)
+            thresh = calc_thresh(M.model, imgtyp)
+            write_submission("/output/%s" % submission, M.model, thresh, imgtyp)
     elif args.test:
-        m = load_model()
-        thresh = calc_thresh(m)
-        write_submission("/output/%s" % submission, m, thresh)
-
+        m = load_model(name)
+        thresh = calc_thresh(m, imgtyp)
+        write_submission("/output/%s" % submission, m, thresh, imgtyp)
     elif args.thresh:
-        m = load_model()
-        calc_thresh(m)
+        m = load_model(name)
+        calc_thresh(m, imgtyp)
 
 
 class StreamToLogger(object):
