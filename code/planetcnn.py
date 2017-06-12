@@ -18,13 +18,13 @@ LANDUSE = ['primary', 'agriculture', 'road', 'water', 'cultivation', 'habitation
            'artisinal_mine', 'blooming', 'blow_down', 'selective_logging', 'slash_burn', 'conventional_mine']
 LANDUSE_W = [1, 2, 2, 2, 4, 4, 8, 8, 8, 8, 8, 8, 8]
 
-H, W, CHANS = 64, 64, 3
+H, W, CHANS = 64, 64, 4
 IMG_SHAPE = (W, H, CHANS)
 
 DH = DataHandler()
 DH.set_train_labels()
 
-SAMPLES = 100
+SAMPLES = 5000
 if SAMPLES is None:
     SAMPLES = DH.train_labels.shape[0]
 
@@ -247,33 +247,36 @@ def mkdir(d):
         os.mkdir(d)
 
 
+def train(M, imgtyp):
+    LOG.info("Starting training run")
+    for X, Y in DH.get_train_iter(imgtyp=imgtyp, h=H, w=W, maxn=SAMPLES):
+        M.set_x_y(X, Y.loc[:, ATMOS + LANDUSE].as_matrix()[0])
+    epochs = 50
+    M.fit_full_datagen(epochs=epochs)
+
+
 def main():
-    # name = "64x64-32-5x5-64-5x5-jpg"
-    name = "base-unet-jpg"
-    imgtyp = "jpg"
-    M = Modeler(name, unet, len(ATMOS) + len(LANDUSE), ATMOS_W + LANDUSE_W, SAMPLES)
+    imgtyp = "tif"
+    name = "64x64-32-5x5-64-5x5-%s" % imgtyp
+    # name = "base-unet-jpg"
+    M = Modeler(name, multi_label_cnn, len(ATMOS) + len(LANDUSE), ATMOS_W + LANDUSE_W, SAMPLES)
     submission = "%s.csv" % name
-    if args.train:
-        LOG.info("Starting training run")
-        for X, Y in DH.get_train_iter(imgtyp=imgtyp, h=H, w=W, maxn=SAMPLES):
-            M.set_x_y(X, Y.loc[:, ATMOS + LANDUSE].as_matrix()[0])
-        epochs = 50
+    if args.all:
         try:
-            M.fit_full_datagen(epochs=epochs)
-            thresh = calc_thresh(M.model, imgtyp)
-            write_submission("/output/%s" % submission, M.model, thresh, imgtyp)
+            train(M, imgtyp)
         except KeyboardInterrupt:
             LOG.info("Stopping training and checkpointing the model")
             M.checkpoint()
             thresh = calc_thresh(M.model, imgtyp)
             write_submission("/output/%s" % submission, M.model, thresh, imgtyp)
+        thresh = calc_thresh(M.model, imgtyp)
+        write_submission("/output/%s" % submission, M.model, thresh, imgtyp)
+    elif args.train:
+        train(M, imgtyp)
     elif args.test:
         m = load_model(name)
         thresh = calc_thresh(m, imgtyp)
         write_submission("/output/%s" % submission, m, thresh, imgtyp)
-    elif args.thresh:
-        m = load_model(name)
-        calc_thresh(m, imgtyp)
 
 
 class StreamToLogger(object):
@@ -302,9 +305,8 @@ if __name__ == '__main__':
 
     # Argument parsing
     parser = argparse.ArgumentParser()
-    parser.add_argument('--checkpoint-on-interrupt', action='store_true')
-    parser.add_argument('--test', action='store_true')
     parser.add_argument('--train', action='store_true')
-    parser.add_argument('--thresh', action='store_true')
+    parser.add_argument('--test', action='store_true')
+    parser.add_argument('--all', action='store_true')
     args = parser.parse_args()
     main()
