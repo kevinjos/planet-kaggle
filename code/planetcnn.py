@@ -18,13 +18,13 @@ LANDUSE = ['primary', 'agriculture', 'road', 'water', 'cultivation', 'habitation
            'artisinal_mine', 'blooming', 'blow_down', 'selective_logging', 'slash_burn', 'conventional_mine']
 LANDUSE_W = [1, 2, 2, 2, 4, 4, 8, 8, 8, 8, 8, 8, 8]
 
-H, W, CHANS = 64, 64, 4
+H, W, CHANS = 128, 128, 4
 IMG_SHAPE = (W, H, CHANS)
 
 DH = DataHandler()
 DH.set_train_labels()
 
-SAMPLES = 5000
+SAMPLES = None
 if SAMPLES is None:
     SAMPLES = DH.train_labels.shape[0]
 
@@ -81,9 +81,9 @@ def multi_label_cnn(nc):
     model.add(keras.layers.Conv2D(
               filters=32,
               kernel_size=(5, 5),
+              activation='relu',
               strides=1,
               padding='valid',
-              activation='relu',
               input_shape=IMG_SHAPE))
     model.add(keras.layers.Conv2D(
               filters=64,
@@ -105,9 +105,9 @@ def multi_label_cnn(nc):
 
 class Modeler(object):
 
-    def __init__(self, name, model_f, nc, cw, sample_num):
+    def __init__(self, name, model, nc, cw, sample_num):
         self.name = name
-        self.model = model_f(nc=nc)
+        self.model = model
         self.class_weight = cw
         self.sample_num = sample_num
         self.datagen = self.train_datagen()
@@ -154,7 +154,7 @@ class Modeler(object):
         self.y_train[self.sample_counter % self.sample_num] = y
         self.sample_counter += 1
 
-    def fit_full_datagen(self, epochs):
+    def fit_full_datagen(self, epochs, from_epoch=0):
         samples_total = len(self.y_train)
         split = int(samples_total * .2)
         samples = samples_total - split
@@ -169,7 +169,11 @@ class Modeler(object):
                                  epochs=epochs,
                                  verbose=2,
                                  validation_data=(x_val, y_val),
+                                 initial_epoch=from_epoch,
                                  callbacks=[self.tb_cb, self.cp_cb])
+        y_val_predict = self.model.predict(x_val)
+        thresh = get_optimal_threshhold(y_val, y_val_predict)
+        return thresh
 
     def checkpoint(self):
         LOG.info("Saving model checkpoint for [%s]" % self.name)
@@ -215,6 +219,41 @@ def get_optimal_threshhold(true_label, prediction, iterations=100):
             if temp_fbeta > best_fbeta:
                 best_fbeta = temp_fbeta
                 best_threshhold[t] = temp_value
+    labels_list = ATMOS + LANDUSE
+    cm = dict(zip(labels_list + ["all"], [{"tp": 0, "fp": 0, "tn": 0, "fn": 0} for x in range(len(ATMOS + LANDUSE) + 1)]))
+    for i, p in enumerate(prediction):
+        for j, p_ in enumerate(p):
+            if p_ > best_threshhold[j]:
+                if true_label[i][j] == 1:
+                    cm[labels_list[j]]["tp"] += 1
+                    cm["all"]["tp"] += 1
+                else:
+                    cm[labels_list[j]]["fp"] += 1
+                    cm["all"]["fp"] += 1
+            else:
+                if true_label[i][j] == 1:
+                    cm[labels_list[j]]["fn"] += 1
+                    cm["all"]["fn"] += 1
+                else:
+                    cm[labels_list[j]]["tn"] += 1
+                    cm["all"]["tn"] += 1
+    for k, v in cm.iteritems():
+        try:
+            precision = v["tp"] / float(v["fp"] + v["tp"])
+        except ZeroDivisionError:
+            precision = None
+        try:
+            recall = v["tp"] / float(v["fn"] + v["tp"])
+        except ZeroDivisionError:
+            recall = None
+        try:
+            f_beta = 5.0 * ((precision * recall) / ((4 * precision) + recall))
+        except ZeroDivisionError:
+            f_beta = None
+        except TypeError:
+            f_beta = None
+        LOG.info("%s: [tp=%s, fp=%s, tn=%s, fn=%s]" % (k, v["tp"], v["fp"], v["tn"], v["fn"]))
+        LOG.info("%s: [precision=%s, recall=%s, f_beta=%s]" % (k, precision, recall, f_beta))
     return best_threshhold
 
 
@@ -247,32 +286,42 @@ def mkdir(d):
         os.mkdir(d)
 
 
-def train(M, imgtyp):
-    LOG.info("Starting training run")
+def train(M, imgtyp, epochs, from_epoch=0):
+    LOG.info("Starting training run with samples=[%s]" % SAMPLES)
     for X, Y in DH.get_train_iter(imgtyp=imgtyp, h=H, w=W, maxn=SAMPLES):
         M.set_x_y(X, Y.loc[:, ATMOS + LANDUSE].as_matrix()[0])
-    epochs = 50
-    M.fit_full_datagen(epochs=epochs)
+    thresh = M.fit_full_datagen(epochs=epochs, from_epoch=from_epoch)
+    return thresh
 
 
 def main():
     imgtyp = "tif"
-    name = "64x64-32-5x5-64-5x5-%s" % imgtyp
-    # name = "base-unet-jpg"
-    M = Modeler(name, multi_label_cnn, len(ATMOS) + len(LANDUSE), ATMOS_W + LANDUSE_W, SAMPLES)
+    # name = "64x64-32-5x5-64-5x5-%s" % imgtyp
+    name = "test"
     submission = "%s.csv" % name
+    from_epoch = args.from_epoch
+    epochs = from_epoch + 5
+    if not args.from_saved:
+        m = multi_label_cnn(len(LANDUSE + ATMOS))
+    elif not os.path.isfile(args.from_saved):
+        LOG.error("%s is not a file" % args.from_saved)
+        return
+    else:
+        LOG.info("Loading model %s" % args.from_saved)
+        m = keras.models.load_model(args.from_saved)
+    M = Modeler(name, m, len(ATMOS) + len(LANDUSE), ATMOS_W + LANDUSE_W, SAMPLES)
     if args.all:
         try:
-            train(M, imgtyp)
+            thresh = train(M, imgtyp, epochs, from_epoch=from_epoch)
         except KeyboardInterrupt:
             LOG.info("Stopping training and checkpointing the model")
             M.checkpoint()
             thresh = calc_thresh(M.model, imgtyp)
             write_submission("/output/%s" % submission, M.model, thresh, imgtyp)
-        thresh = calc_thresh(M.model, imgtyp)
+            return
         write_submission("/output/%s" % submission, M.model, thresh, imgtyp)
     elif args.train:
-        train(M, imgtyp)
+        train(M, imgtyp, epochs, from_epoch=from_epoch)
     elif args.test:
         m = load_model(name)
         thresh = calc_thresh(m, imgtyp)
@@ -308,5 +357,7 @@ if __name__ == '__main__':
     parser.add_argument('--train', action='store_true')
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--all', action='store_true')
+    parser.add_argument('--from-saved', type=str, default=None)
+    parser.add_argument('--from-epoch', type=int, default=0)
     args = parser.parse_args()
     main()
