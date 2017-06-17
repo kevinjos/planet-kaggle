@@ -18,7 +18,7 @@ LANDUSE = ['primary', 'agriculture', 'road', 'water', 'cultivation', 'habitation
            'artisinal_mine', 'blooming', 'blow_down', 'selective_logging', 'slash_burn', 'conventional_mine']
 LANDUSE_W = [1, 2, 2, 2, 4, 4, 8, 8, 8, 8, 8, 8, 8]
 
-H, W, CHANS = 128, 128, 4
+H, W, CHANS = 64, 64, 4
 IMG_SHAPE = (W, H, CHANS)
 
 DH = DataHandler()
@@ -79,23 +79,44 @@ def unet(nc):
 def multi_label_cnn(nc):
     model = keras.models.Sequential()
     model.add(keras.layers.Conv2D(
-              filters=32,
-              kernel_size=(5, 5),
+              filters=110,
+              kernel_size=(7, 7),
               activation='relu',
-              strides=1,
-              padding='valid',
+              strides=2,
+              padding='same',
               input_shape=IMG_SHAPE))
+    model.add(keras.layers.MaxPooling2D(pool_size=(3, 3), strides=2))
     model.add(keras.layers.Conv2D(
-              filters=64,
+              filters=26,
               kernel_size=(5, 5),
               activation='relu',
+              strides=2,
+              padding='same'))
+    model.add(keras.layers.MaxPooling2D(pool_size=(3, 3), strides=2))
+    model.add(keras.layers.Conv2D(
+              filters=13,
+              kernel_size=(3, 3),
+              activation='relu',
               strides=1,
-              padding='valid'))
-    model.add(keras.layers.MaxPooling2D(pool_size=(2, 2)))
-    model.add(keras.layers.Dropout(0.25))
+              padding='same'))
+    model.add(keras.layers.Dropout(0.2))
+    model.add(keras.layers.Conv2D(
+              filters=13,
+              kernel_size=(3, 3),
+              activation='relu',
+              strides=1,
+              padding='same'))
+    model.add(keras.layers.Dropout(0.2))
+    model.add(keras.layers.Conv2D(
+              filters=13,
+              kernel_size=(3, 3),
+              activation='relu',
+              strides=1,
+              padding='same'))
+    model.add(keras.layers.MaxPooling2D(pool_size=(3, 3), strides=2))
     model.add(keras.layers.Flatten())
-    model.add(keras.layers.Dense(128, activation='relu'))
-    model.add(keras.layers.Dropout(0.5))
+    model.add(keras.layers.Dense(4096, activation='relu'))
+    model.add(keras.layers.Dense(4096, activation='relu'))
     model.add(keras.layers.Dense(nc, activation='sigmoid'))
 
     model.compile(loss=keras.losses.binary_crossentropy,
@@ -125,8 +146,8 @@ class Modeler(object):
         graphdir = basepath + "/graph/" + self.name + "/"
         mkdir(graphdir)
         return keras.callbacks.TensorBoard(log_dir=graphdir,
-                                           histogram_freq=0,
-                                           write_graph=False,
+                                           histogram_freq=10,
+                                           write_graph=True,
                                            write_images=False)
 
     # Setup model checkpoint callbacks
@@ -143,8 +164,8 @@ class Modeler(object):
     def train_datagen(self):
         return keras.preprocessing.image.ImageDataGenerator(
             shear_range=0.2,
-            zoom_range=0.2,
-            rotation_range=20,
+            # zoom_range=0.2,
+            rotation_range=45,
             width_shift_range=0.2,
             height_shift_range=0.2,
             horizontal_flip=True)
@@ -161,9 +182,9 @@ class Modeler(object):
         x_val, y_val = self.x_train[:split], self.y_train[:split]
         x_train, y_train = self.x_train[split:], self.y_train[split:]
         batch_size = 32
-        steps_per_epochs = samples // batch_size
         LOG.info("Training with data generation for model=[%s]" % self.name)
         LOG.info("train samples=[%s], validation samples=[%s], batch size=[%s], epochs=[%s]" % (samples, split, batch_size, epochs))
+        steps_per_epochs = samples // batch_size
         self.model.fit_generator(self.datagen.flow(x_train, y_train, batch_size=batch_size),
                                  steps_per_epochs,
                                  epochs=epochs,
@@ -171,8 +192,17 @@ class Modeler(object):
                                  validation_data=(x_val, y_val),
                                  initial_epoch=from_epoch,
                                  callbacks=[self.tb_cb, self.cp_cb])
-        y_val_predict = self.model.predict(x_val)
-        thresh = get_optimal_threshhold(y_val, y_val_predict)
+        """
+        self.model.fit(x_train, y_train,
+                       batch_size=batch_size,
+                       epochs=epochs,
+                       verbose=2,
+                       validation_data=(x_val, y_val),
+                       initial_epoch=from_epoch,
+                       callbacks=[self.tb_cb, self.cp_cb])
+        """
+        y_train_predict = self.model.predict(self.x_train)
+        thresh = get_optimal_threshhold(self.y_train, y_train_predict)
         return thresh
 
     def checkpoint(self):
@@ -212,13 +242,14 @@ def get_optimal_threshhold(true_label, prediction, iterations=100):
     for t in range(17):
         best_fbeta = 0
         temp_threshhold = [0.2] * 17
-        for i in range(iterations):
+        for i in range(1, iterations + 1):
             temp_value = i / float(iterations)
             temp_threshhold[t] = temp_value
             temp_fbeta = fbeta(true_label, prediction > temp_threshhold)
             if temp_fbeta > best_fbeta:
                 best_fbeta = temp_fbeta
                 best_threshhold[t] = temp_value
+    LOG.info("Using thresholds: %s" % best_threshhold)
     labels_list = ATMOS + LANDUSE
     cm = dict(zip(labels_list + ["all"], [{"tp": 0, "fp": 0, "tn": 0, "fn": 0} for x in range(len(ATMOS + LANDUSE) + 1)]))
     for i, p in enumerate(prediction):
@@ -296,11 +327,10 @@ def train(M, imgtyp, epochs, from_epoch=0):
 
 def main():
     imgtyp = "tif"
-    # name = "64x64-32-5x5-64-5x5-%s" % imgtyp
-    name = "test"
+    name = "AlexNeteque-%s" % imgtyp
     submission = "%s.csv" % name
     from_epoch = args.from_epoch
-    epochs = from_epoch + 5
+    epochs = from_epoch + 100
     if not args.from_saved:
         m = multi_label_cnn(len(LANDUSE + ATMOS))
     elif not os.path.isfile(args.from_saved):
