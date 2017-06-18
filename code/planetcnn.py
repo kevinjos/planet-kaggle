@@ -12,10 +12,13 @@ import argparse
 from planetutils import DataHandler
 
 
-ATMOS = ['clear', 'partly_cloudy', 'haze', 'cloudy']
+ATMOS = ['clear',
+         'partly_cloudy',
+         'haze', 'cloudy']
 ATMOS_W = [1, 2, 4, 4]
-LANDUSE = ['primary', 'agriculture', 'road', 'water', 'cultivation', 'habitation', 'bare_ground',
-           'artisinal_mine', 'blooming', 'blow_down', 'selective_logging', 'slash_burn', 'conventional_mine']
+LANDUSE = ['primary', 'agriculture', 'road', 'water',
+           'cultivation', 'habitation',
+           'bare_ground', 'artisinal_mine', 'blooming', 'blow_down', 'selective_logging', 'slash_burn', 'conventional_mine']
 LANDUSE_W = [1, 2, 2, 2, 4, 4, 8, 8, 8, 8, 8, 8, 8]
 
 H, W, CHANS = 64, 64, 4
@@ -27,6 +30,26 @@ DH.set_train_labels()
 SAMPLES = None
 if SAMPLES is None:
     SAMPLES = DH.train_labels.shape[0]
+
+
+def pretrained(nc):
+    # input_tensor = keras.layers.Input(batch_shape=(None, 64, 64, 3))
+    # vgg = keras.applications.VGG16(input_tensor=input_tensor, input_shape=IMG_SHAPE, weights='imagenet', include_top=False)
+    vgg = keras.applications.VGG16(weights='imagenet', include_top=False)
+    for layer in vgg.layers:
+        layer.trainable = False
+    x = vgg.output
+    x = keras.layers.GlobalAveragePooling2D()(x)
+    x = keras.layers.Dense(4096, activation='relu')(x)
+    x = keras.layers.Dense(2048, activation='relu')(x)
+    x = keras.layers.Dense(1024, activation='relu')(x)
+    x = keras.layers.Dense(512, activation='relu')(x)
+    predictions = keras.layers.Dense(nc, activation='sigmoid')(x)
+    model = keras.models.Model(inputs=vgg.input, outputs=predictions)
+    model.compile(keras.optimizers.SGD(lr=1e-4, momentum=0.9),
+                  keras.losses.binary_crossentropy,
+                  metrics=['accuracy'])
+    return model
 
 
 def unet(nc):
@@ -79,44 +102,51 @@ def unet(nc):
 def multi_label_cnn(nc):
     model = keras.models.Sequential()
     model.add(keras.layers.Conv2D(
-              filters=110,
-              kernel_size=(7, 7),
+              filters=128,
+              kernel_size=(3, 3),
               activation='relu',
-              strides=2,
-              padding='same',
+              strides=1,
+              padding='valid',
               input_shape=IMG_SHAPE))
-    model.add(keras.layers.MaxPooling2D(pool_size=(3, 3), strides=2))
     model.add(keras.layers.Conv2D(
-              filters=26,
-              kernel_size=(5, 5),
-              activation='relu',
-              strides=2,
-              padding='same'))
-    model.add(keras.layers.MaxPooling2D(pool_size=(3, 3), strides=2))
-    model.add(keras.layers.Conv2D(
-              filters=13,
+              filters=128,
               kernel_size=(3, 3),
               activation='relu',
               strides=1,
-              padding='same'))
-    model.add(keras.layers.Dropout(0.2))
+              padding='valid'))
     model.add(keras.layers.Conv2D(
-              filters=13,
+              filters=128,
               kernel_size=(3, 3),
               activation='relu',
               strides=1,
-              padding='same'))
-    model.add(keras.layers.Dropout(0.2))
-    model.add(keras.layers.Conv2D(
-              filters=13,
-              kernel_size=(3, 3),
-              activation='relu',
-              strides=1,
-              padding='same'))
+              padding='valid'))
     model.add(keras.layers.MaxPooling2D(pool_size=(3, 3), strides=2))
+    model.add(keras.layers.Dropout(0.5))
+    model.add(keras.layers.Conv2D(
+              filters=128,
+              kernel_size=(3, 3),
+              activation='relu',
+              strides=1,
+              padding='valid',
+              input_shape=IMG_SHAPE))
+    model.add(keras.layers.Conv2D(
+              filters=128,
+              kernel_size=(3, 3),
+              activation='relu',
+              strides=1,
+              padding='valid'))
+    model.add(keras.layers.Conv2D(
+              filters=128,
+              kernel_size=(3, 3),
+              activation='relu',
+              strides=1,
+              padding='valid'))
+    model.add(keras.layers.MaxPooling2D(pool_size=(3, 3), strides=2))
+    model.add(keras.layers.Dropout(0.5))
     model.add(keras.layers.Flatten())
-    model.add(keras.layers.Dense(4096, activation='relu'))
-    model.add(keras.layers.Dense(4096, activation='relu'))
+    model.add(keras.layers.Dense(2048, activation='relu'))
+    model.add(keras.layers.Dense(1024, activation='relu'))
+    model.add(keras.layers.Dense(512, activation='relu'))
     model.add(keras.layers.Dense(nc, activation='sigmoid'))
 
     model.compile(loss=keras.losses.binary_crossentropy,
@@ -212,14 +242,6 @@ class Modeler(object):
         return
 
 
-def load_model(mfn):
-    mfn += ".hdf5"
-    keras.backend.manual_variable_initialization(True)
-    path = DH.basepath + "/model-archive/" + mfn
-    M = keras.models.load_model(path)
-    return M
-
-
 def prediction(M, X, thresh):
     model_prediction = M.predict(np.array([X]))
     model_prediction = model_prediction[0]
@@ -237,7 +259,7 @@ def fbeta(true_label, prediction):
     return fbeta_score(true_label, prediction, beta=2, average='samples')
 
 
-def get_optimal_threshhold(true_label, prediction, iterations=100):
+def get_optimal_threshhold(true_label, prediction, iterations=1000):
     best_threshhold = [0.2] * 17
     for t in range(17):
         best_fbeta = 0
@@ -288,20 +310,6 @@ def get_optimal_threshhold(true_label, prediction, iterations=100):
     return best_threshhold
 
 
-def calc_thresh(m, imgtyp):
-    LOG.info("Optimizing thresholds")
-    true_label, p = [], []
-    for X, Y in DH.get_train_iter(imgtyp=imgtyp, h=H, w=W, maxn=SAMPLES // 5):
-        Y = Y.loc[:, ATMOS + LANDUSE].as_matrix()[0]
-        true_label.append(list(Y))
-        X = X / (np.power(2, 16) - 1.)
-        pred = m.predict(np.array([X]))
-        p.append(list(pred[0]))
-    t = get_optimal_threshhold(np.array(true_label), np.array(p))
-    LOG.info("Best thresholds for %s are %s" % (ATMOS + LANDUSE, t))
-    return t
-
-
 def write_submission(outputpath, m, thresh, imgtyp):
     maxn = None if SAMPLES > 10000 else 100
     with open(DH.basepath + outputpath, "w") as fp:
@@ -327,10 +335,12 @@ def train(M, imgtyp, epochs, from_epoch=0):
 
 def main():
     imgtyp = "tif"
-    name = "AlexNeteque-%s" % imgtyp
+    name = "multilayer-from-scratch-%s" % imgtyp
     submission = "%s.csv" % name
     from_epoch = args.from_epoch
     epochs = from_epoch + 100
+    if args.from_saved == "pretrained":
+        m = pretrained(len(LANDUSE + ATMOS))
     if not args.from_saved:
         m = multi_label_cnn(len(LANDUSE + ATMOS))
     elif not os.path.isfile(args.from_saved):
@@ -339,23 +349,29 @@ def main():
     else:
         LOG.info("Loading model %s" % args.from_saved)
         m = keras.models.load_model(args.from_saved)
-    M = Modeler(name, m, len(ATMOS) + len(LANDUSE), ATMOS_W + LANDUSE_W, SAMPLES)
+    M = Modeler(name, m, len(ATMOS + LANDUSE), ATMOS_W + LANDUSE_W, SAMPLES)
     if args.all:
         try:
             thresh = train(M, imgtyp, epochs, from_epoch=from_epoch)
         except KeyboardInterrupt:
             LOG.info("Stopping training and checkpointing the model")
             M.checkpoint()
-            thresh = calc_thresh(M.model, imgtyp)
+            predictions = M.model.predict(M.x_train)
+            thresh = get_optimal_threshhold(M.y_train, predictions)
             write_submission("/output/%s" % submission, M.model, thresh, imgtyp)
             return
         write_submission("/output/%s" % submission, M.model, thresh, imgtyp)
     elif args.train:
         train(M, imgtyp, epochs, from_epoch=from_epoch)
     elif args.test:
-        m = load_model(name)
-        thresh = calc_thresh(m, imgtyp)
-        write_submission("/output/%s" % submission, m, thresh, imgtyp)
+        m = keras.models.load_model(args.from_saved)
+        name = args.from_saved.split("/")[-1].split(".")[0]
+        M = Modeler(name, m, len(ATMOS + LANDUSE), ATMOS_W + LANDUSE_W, SAMPLES)
+        for X, Y in DH.get_train_iter(imgtyp=imgtyp, h=H, w=W):
+            M.set_x_y(X, Y.loc[:, ATMOS + LANDUSE].as_matrix()[0])
+        predictions = M.model.predict(M.x_train)
+        thresh = get_optimal_threshhold(M.y_train, predictions)
+        write_submission("/output/%s" % submission, M.model, thresh, imgtyp)
 
 
 class StreamToLogger(object):
@@ -379,8 +395,8 @@ if __name__ == '__main__':
     formatter = logging.Formatter('[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s')
     handler.setFormatter(formatter)
     LOG.addHandler(handler)
-    sys.stdout = StreamToLogger(LOG)
-    sys.stderr = sys.stdout
+    # sys.stdout = StreamToLogger(LOG)
+    # sys.stderr = sys.stdout
 
     # Argument parsing
     parser = argparse.ArgumentParser()
