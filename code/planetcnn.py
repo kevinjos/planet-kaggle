@@ -56,17 +56,21 @@ def unet(nc):
     inputs = keras.layers.Input((H, W, CHANS))
     conv1 = keras.layers.Conv2D(32, (3, 3), activation='relu', padding='same')(inputs)
     conv1 = keras.layers.Conv2D(32, (3, 3), activation='relu', padding='same')(conv1)
+    conv1 = keras.layers.Conv2D(32, (3, 3), activation='relu', padding='same')(conv1)
     pool1 = keras.layers.MaxPooling2D(pool_size=(2, 2))(conv1)
 
     conv2 = keras.layers.Conv2D(64, (3, 3), activation='relu', padding='same')(pool1)
+    conv2 = keras.layers.Conv2D(64, (3, 3), activation='relu', padding='same')(conv2)
     conv2 = keras.layers.Conv2D(64, (3, 3), activation='relu', padding='same')(conv2)
     pool2 = keras.layers.MaxPooling2D(pool_size=(2, 2))(conv2)
 
     conv3 = keras.layers.Conv2D(128, (3, 3), activation='relu', padding='same')(pool2)
     conv3 = keras.layers.Conv2D(128, (3, 3), activation='relu', padding='same')(conv3)
+    conv3 = keras.layers.Conv2D(128, (3, 3), activation='relu', padding='same')(conv3)
     pool3 = keras.layers.MaxPooling2D(pool_size=(2, 2))(conv3)
 
     conv4 = keras.layers.Conv2D(256, (3, 3), activation='relu', padding='same')(pool3)
+    conv4 = keras.layers.Conv2D(256, (3, 3), activation='relu', padding='same')(conv4)
     conv4 = keras.layers.Conv2D(256, (3, 3), activation='relu', padding='same')(conv4)
     pool4 = keras.layers.MaxPooling2D(pool_size=(2, 2))(conv4)
 
@@ -102,6 +106,48 @@ def unet(nc):
 def multi_label_cnn(nc):
     model = keras.models.Sequential()
     model.add(keras.layers.Conv2D(
+              filters=32,
+              kernel_size=(3, 3),
+              activation='relu',
+              strides=1,
+              padding='valid',
+              input_shape=IMG_SHAPE))
+    model.add(keras.layers.Conv2D(
+              filters=32,
+              kernel_size=(3, 3),
+              activation='relu',
+              strides=1,
+              padding='valid'))
+    model.add(keras.layers.Conv2D(
+              filters=32,
+              kernel_size=(3, 3),
+              activation='relu',
+              strides=1,
+              padding='valid'))
+    model.add(keras.layers.MaxPooling2D(pool_size=(3, 3), strides=2))
+    model.add(keras.layers.Dropout(0.2))
+    model.add(keras.layers.Conv2D(
+              filters=64,
+              kernel_size=(3, 3),
+              activation='relu',
+              strides=1,
+              padding='valid',
+              input_shape=IMG_SHAPE))
+    model.add(keras.layers.Conv2D(
+              filters=64,
+              kernel_size=(3, 3),
+              activation='relu',
+              strides=1,
+              padding='valid'))
+    model.add(keras.layers.Conv2D(
+              filters=64,
+              kernel_size=(3, 3),
+              activation='relu',
+              strides=1,
+              padding='valid'))
+    model.add(keras.layers.MaxPooling2D(pool_size=(3, 3), strides=2))
+    model.add(keras.layers.Dropout(0.2))
+    model.add(keras.layers.Conv2D(
               filters=128,
               kernel_size=(3, 3),
               activation='relu',
@@ -121,32 +167,11 @@ def multi_label_cnn(nc):
               strides=1,
               padding='valid'))
     model.add(keras.layers.MaxPooling2D(pool_size=(3, 3), strides=2))
-    model.add(keras.layers.Dropout(0.5))
-    model.add(keras.layers.Conv2D(
-              filters=128,
-              kernel_size=(3, 3),
-              activation='relu',
-              strides=1,
-              padding='valid',
-              input_shape=IMG_SHAPE))
-    model.add(keras.layers.Conv2D(
-              filters=128,
-              kernel_size=(3, 3),
-              activation='relu',
-              strides=1,
-              padding='valid'))
-    model.add(keras.layers.Conv2D(
-              filters=128,
-              kernel_size=(3, 3),
-              activation='relu',
-              strides=1,
-              padding='valid'))
-    model.add(keras.layers.MaxPooling2D(pool_size=(3, 3), strides=2))
-    model.add(keras.layers.Dropout(0.5))
+    model.add(keras.layers.Dropout(0.2))
     model.add(keras.layers.Flatten())
-    model.add(keras.layers.Dense(2048, activation='relu'))
-    model.add(keras.layers.Dense(1024, activation='relu'))
-    model.add(keras.layers.Dense(512, activation='relu'))
+    model.add(keras.layers.Dense(128, activation='relu'))
+    model.add(keras.layers.Dense(64, activation='relu'))
+    model.add(keras.layers.Dense(32, activation='relu'))
     model.add(keras.layers.Dense(nc, activation='sigmoid'))
 
     model.compile(loss=keras.losses.binary_crossentropy,
@@ -231,7 +256,7 @@ class Modeler(object):
                        initial_epoch=from_epoch,
                        callbacks=[self.tb_cb, self.cp_cb])
         """
-        y_train_predict = self.model.predict(self.x_train)
+        y_train_predict = predict_with_logic(self.model, self.x_train)
         thresh = get_optimal_threshhold(self.y_train, y_train_predict)
         return thresh
 
@@ -255,22 +280,39 @@ def prediction(M, X, thresh):
     return " ".join(result)
 
 
+def predict_with_logic(m, x):
+    Y = m.predict(x)
+    for idy, y in enumerate(Y):
+        # Chose the most likely single atmospheric condition
+        atmos_label_idx = np.argmax(y[:len(ATMOS)])
+        y[atmos_label_idx] = 1
+        y[:atmos_label_idx] = 0
+        y[atmos_label_idx + 1:len(ATMOS)] = 0
+        # If it's cloudly, then there are no land-use labels
+        if atmos_label_idx == 3:
+            y[4:] = 0
+        Y[idy] = y
+    return Y
+
+
 def fbeta(true_label, prediction):
     return fbeta_score(true_label, prediction, beta=2, average='samples')
 
 
 def get_optimal_threshhold(true_label, prediction, iterations=1000):
-    best_threshhold = [0.2] * 17
-    for t in range(17):
+    best_threshhold = [0.2] * len(LANDUSE)
+    for t in range(len(LANDUSE)):
         best_fbeta = 0
-        temp_threshhold = [0.2] * 17
+        temp_threshhold = [0.2] * len(LANDUSE)
         for i in range(1, iterations + 1):
             temp_value = i / float(iterations)
             temp_threshhold[t] = temp_value
-            temp_fbeta = fbeta(true_label, prediction > temp_threshhold)
+            temp_fbeta = fbeta(true_label[:, len(ATMOS):], prediction[:, len(ATMOS):] > temp_threshhold)
             if temp_fbeta > best_fbeta:
                 best_fbeta = temp_fbeta
                 best_threshhold[t] = temp_value
+    # Always use 0.5 for the atmos threshold since it's already assumed to be 0 or 1 by now
+    best_threshhold = [0.5, 0.5, 0.5, 0.5] + best_threshhold
     LOG.info("Using thresholds: %s" % best_threshhold)
     labels_list = ATMOS + LANDUSE
     cm = dict(zip(labels_list + ["all"], [{"tp": 0, "fp": 0, "tn": 0, "fn": 0} for x in range(len(ATMOS + LANDUSE) + 1)]))
@@ -335,14 +377,14 @@ def train(M, imgtyp, epochs, from_epoch=0):
 
 def main():
     imgtyp = "tif"
-    name = "multilayer-from-scratch-%s" % imgtyp
+    name = "test-%s" % imgtyp
     submission = "%s.csv" % name
     from_epoch = args.from_epoch
     epochs = from_epoch + 100
     if args.from_saved == "pretrained":
-        m = pretrained(len(LANDUSE + ATMOS))
+        m = pretrained(len(ATMOS + LANDUSE))
     if not args.from_saved:
-        m = multi_label_cnn(len(LANDUSE + ATMOS))
+        m = multi_label_cnn(len(ATMOS + LANDUSE))
     elif not os.path.isfile(args.from_saved):
         LOG.error("%s is not a file" % args.from_saved)
         return
@@ -369,7 +411,7 @@ def main():
         M = Modeler(name, m, len(ATMOS + LANDUSE), ATMOS_W + LANDUSE_W, SAMPLES)
         for X, Y in DH.get_train_iter(imgtyp=imgtyp, h=H, w=W):
             M.set_x_y(X, Y.loc[:, ATMOS + LANDUSE].as_matrix()[0])
-        predictions = M.model.predict(M.x_train)
+        predictions = predict_with_logic(M.model, M.x_train)
         thresh = get_optimal_threshhold(M.y_train, predictions)
         write_submission("/output/%s" % submission, M.model, thresh, imgtyp)
 
