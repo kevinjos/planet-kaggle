@@ -12,5 +12,5 @@ init:
 	mkdir $(GRAPHDIR)
 	mkdir $(MODELDIR)
 	mkdir $(INPUTDIR)
-	mkdir $(OUTPUT)
-	mkdir $(LOG)
+	mkdir $(OUTPUTDIR)
+	mkdir $(LOGDIR)
