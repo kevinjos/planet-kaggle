@@ -269,7 +269,8 @@ class EpochLogger(keras.callbacks.Callback):
     def __init__(self, logger):
         self.log = logger
     def on_epoch_end(self, epoch, logs):
-        lr = K.eval(self.model.optimizer.lr)
+        t = self.model.optimizer.iterations + 1
+        lr = K.eval(self.model.optimizer.lr * (K.sqrt(1. - K.pow(self.model.optimizer.beta_2, t)) / (1. - K.pow(self.model.optimizer.beta_1, t))))
         self.log.info("Epoch %s: learning_rate=[%s], loss=[%s], val_loss=[%s]" % (epoch, lr, logs['loss'], logs['val_loss']))
 
 
