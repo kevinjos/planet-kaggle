@@ -5,7 +5,6 @@ import numpy as np
 from sklearn.metrics import fbeta_score
 
 import logging
-import sys
 import os
 import argparse
 
@@ -23,15 +22,15 @@ LANDUSE = ['primary', 'agriculture', 'road', 'water',
 LANDUSE_W = [1, 2, 2, 2, 4, 4, 8, 8, 8, 8, 8, 8, 8]
 
 
-IMGTYP = "tif"
+IMGTYP = 'jpg'
 JPG_128_128_MEAN = (77, 88, 81)
 TIF_128_128_MEAN = (3075, 4271, 4989, 6399)
-MEAN_VALS = TIF_128_128_MEAN if IMGTYP == "tif" else JPG_128_128_MEAN
+MEAN_VALS = TIF_128_128_MEAN if IMGTYP == 'tif' else JPG_128_128_MEAN
 
-H, W, CHANS = 128, 128, 4 if IMGTYP == "tif" else 3
+H, W, CHANS = 128, 128, 4 if IMGTYP == 'tif' else 3
 IMG_SHAPE = (W, H, CHANS)
 
-DH = DataHandler()
+DH = DataHandler(basepath='/home/kevin.joseph.schiesser/repos/planet-kaggle')
 DH.set_train_labels()
 
 SAMPLES = None
@@ -41,7 +40,7 @@ if SAMPLES is None:
 
 class Modeler(object):
 
-    def __init__(self, name, model, nc, cw, sample_num):
+    def __init__(self, name, model, nc, sample_num, cw=None):
         self.name = name
         self.model = model
         self.class_weight = cw
@@ -59,7 +58,7 @@ class Modeler(object):
 
     # Setup tensorboard callbacks
     def tensorboard_cb(self, basepath=DH.basepath):
-        graphdir = basepath + "/graph/" + self.name + "/"
+        graphdir = basepath + '/graph/' + self.name + '/'
         mkdir(graphdir)
         return keras.callbacks.TensorBoard(log_dir=graphdir,
                                            histogram_freq=10,
@@ -68,9 +67,9 @@ class Modeler(object):
 
     # Setup model checkpoint callbacks
     def checkpoint_cb(self, basepath=DH.basepath):
-        modeldir = basepath + "/model/" + self.name + "/"
+        modeldir = basepath + '/model/' + self.name + '/'
         mkdir(modeldir)
-        cp_fn = "{epoch:03d}-{val_loss:.5f}.hdf5"
+        cp_fn = '{epoch:03d}-{val_loss:.5f}.hdf5'
         return keras.callbacks.ModelCheckpoint(modeldir + cp_fn, monitor='val_loss',
                                                save_best_only=False,
                                                save_weights_only=False,
@@ -99,8 +98,8 @@ class Modeler(object):
         x_val, y_val = self.x_train[:split], self.y_train[:split]
         x_train, y_train = self.x_train[split:], self.y_train[split:]
         batch_size = 32
-        LOG.info("Training with data generation for model=[%s]" % self.name)
-        LOG.info("train samples=[%s], validation samples=[%s], batch size=[%s], epochs=[%s]" % (samples, split, batch_size, epochs))
+        LOG.info('Training with data generation for model=[%s]' % self.name)
+        LOG.info('train samples=[%s], validation samples=[%s], batch size=[%s], epochs=[%s]' % (samples, split, batch_size, epochs))
         steps_per_epochs = samples // batch_size
         self.model.fit_generator(self.datagen.flow(x_train, y_train, batch_size=batch_size),
                                  steps_per_epochs,
@@ -123,9 +122,9 @@ class Modeler(object):
         return thresh
 
     def checkpoint(self):
-        LOG.info("Saving model checkpoint for [%s]" % self.name)
-        cp_fn = "%s.hdf5" % self.name
-        keras.models.save_model(self.model, DH.basepath + "/model/" + cp_fn)
+        LOG.info('Saving model checkpoint for [%s]' % self.name)
+        cp_fn = '%s.hdf5' % self.name
+        keras.models.save_model(self.model, DH.basepath + '/model/' + cp_fn)
         return
 
 
@@ -147,32 +146,32 @@ def get_optimal_threshhold(true_label, prediction, iterations=1000):
                 best_threshhold[t] = temp_value
     # Always use 0.5 for the atmos threshold since it's already assumed to be 0 or 1 by now
     best_threshhold = [0.5, 0.5, 0.5, 0.5] + best_threshhold
-    LOG.info("Using thresholds: %s" % best_threshhold)
+    LOG.info('Using thresholds: %s' % best_threshhold)
     labels_list = ATMOS + LANDUSE
-    cm = dict(zip(labels_list + ["all"], [{"tp": 0, "fp": 0, "tn": 0, "fn": 0} for x in range(len(ATMOS + LANDUSE) + 1)]))
+    cm = dict(zip(labels_list + ['all'], [{'tp': 0, 'fp': 0, 'tn': 0, 'fn': 0} for x in range(len(ATMOS + LANDUSE) + 1)]))
     for i, p in enumerate(prediction):
         for j, p_ in enumerate(p):
             if p_ > best_threshhold[j]:
                 if true_label[i][j] == 1:
-                    cm[labels_list[j]]["tp"] += 1
-                    cm["all"]["tp"] += 1
+                    cm[labels_list[j]]['tp'] += 1
+                    cm['all']['tp'] += 1
                 else:
-                    cm[labels_list[j]]["fp"] += 1
-                    cm["all"]["fp"] += 1
+                    cm[labels_list[j]]['fp'] += 1
+                    cm['all']['fp'] += 1
             else:
                 if true_label[i][j] == 1:
-                    cm[labels_list[j]]["fn"] += 1
-                    cm["all"]["fn"] += 1
+                    cm[labels_list[j]]['fn'] += 1
+                    cm['all']['fn'] += 1
                 else:
-                    cm[labels_list[j]]["tn"] += 1
-                    cm["all"]["tn"] += 1
+                    cm[labels_list[j]]['tn'] += 1
+                    cm['all']['tn'] += 1
     for k, v in cm.iteritems():
         try:
-            precision = v["tp"] / float(v["fp"] + v["tp"])
+            precision = v['tp'] / float(v['fp'] + v['tp'])
         except ZeroDivisionError:
             precision = None
         try:
-            recall = v["tp"] / float(v["fn"] + v["tp"])
+            recall = v['tp'] / float(v['fn'] + v['tp'])
         except ZeroDivisionError:
             recall = None
         try:
@@ -181,8 +180,8 @@ def get_optimal_threshhold(true_label, prediction, iterations=1000):
             f_beta = None
         except TypeError:
             f_beta = None
-        LOG.info("%s: [tp=%s, fp=%s, tn=%s, fn=%s]" % (k, v["tp"], v["fp"], v["tn"], v["fn"]))
-        LOG.info("%s: [precision=%s, recall=%s, f_beta=%s]" % (k, precision, recall, f_beta))
+        LOG.info('%s: [tp=%s, fp=%s, tn=%s, fn=%s]' % (k, v['tp'], v['fp'], v['tn'], v['fn']))
+        LOG.info('%s: [precision=%s, recall=%s, f_beta=%s]' % (k, precision, recall, f_beta))
     return best_threshhold
 
 
@@ -196,7 +195,7 @@ def prediction(M, X, thresh):
     for i, label in enumerate(labels):
         if model_prediction[i]:
             result.append(label)
-    return " ".join(result)
+    return ' '.join(result)
 
 
 def predict_with_logic(m, x):
@@ -216,12 +215,12 @@ def predict_with_logic(m, x):
 
 def write_submission(outputpath, m, thresh, x_transform):
     maxn = None if SAMPLES > 10000 else 100
-    with open(DH.basepath + outputpath, "w") as fp:
-        fp.write("image_name,tags\n")
+    with open(DH.basepath + outputpath, 'w') as fp:
+        fp.write('image_name,tags\n')
         for name, X in DH.get_test_iter(imgtyp=IMGTYP, h=H, w=W, maxn=maxn):
             X = x_transform(X)
             p = prediction(m, X, thresh)
-            fp.write("%s,%s\n" % (name, p))
+            fp.write('%s,%s\n' % (name, p))
 
 
 def mkdir(d):
@@ -230,7 +229,7 @@ def mkdir(d):
 
 
 def train(M, epochs, x_transform, from_epoch=0):
-    LOG.info("Starting training run with samples=[%s]" % SAMPLES)
+    LOG.info('Starting training run with samples=[%s]' % SAMPLES)
     for X, Y in DH.get_train_iter(imgtyp=IMGTYP, h=H, w=W, maxn=SAMPLES):
         M.set_x_y(X, Y.loc[:, ATMOS + LANDUSE].as_matrix()[0], x_transform)
     thresh = M.fit_full_datagen(epochs=epochs, from_epoch=from_epoch)
@@ -239,74 +238,42 @@ def train(M, epochs, x_transform, from_epoch=0):
 
 def main():
     x_transform = lambda x: x - MEAN_VALS
-    name = "test-%s" % IMGTYP
-    submission = "%s.csv" % name
-    from_epoch = args.from_epoch
-    epochs = from_epoch + 1
-    if args.from_saved == "pretrained":
-        m = pretrained(len(ATMOS + LANDUSE), H, W, CHANS)
-    if not args.from_saved:
-        m = multi_label_cnn(len(ATMOS + LANDUSE), H, W, CHANS)
-    elif not os.path.isfile(args.from_saved):
-        LOG.error("%s is not a file" % args.from_saved)
-        return
-    else:
-        LOG.info("Loading model %s" % args.from_saved)
-        m = keras.models.load_model(args.from_saved)
-    M = Modeler(name, m, len(ATMOS + LANDUSE), ATMOS_W + LANDUSE_W, SAMPLES)
-    if args.all:
-        try:
-            thresh = train(M, epochs, x_transform, from_epoch=from_epoch)
-        except KeyboardInterrupt:
-            LOG.info("Stopping training and checkpointing the model")
-            M.checkpoint()
-            predictions = M.model.predict(M.x_train)
-            thresh = get_optimal_threshhold(M.y_train, predictions)
-            write_submission("/output/%s" % submission, M.model, thresh)
-            return
-        write_submission("/output/%s" % submission, M.model, thresh, x_transform)
-    elif args.train:
-        train(M, epochs, from_epoch=from_epoch)
+    name = '3-c3x3_32-64-128_mp3x3-2-%s' % IMGTYP
+    submission = '%s.csv' % name
+    if args.train:
+        from_epoch = args.from_epoch
+        epochs = from_epoch + 1
+        if not args.from_saved:
+            m = multi_label_cnn(len(ATMOS + LANDUSE), H, W, CHANS)
+        else:
+            LOG.info('Loading model %s' % args.from_saved)
+            m = keras.models.load_model(args.from_saved)
+        M = Modeler(name, m, len(ATMOS + LANDUSE), SAMPLES)
+        train(M, epochs, x_transform, from_epoch=from_epoch)
     elif args.test:
         m = keras.models.load_model(args.from_saved)
-        name = args.from_saved.split("/")[-1].split(".")[0]
-        M = Modeler(name, m, len(ATMOS + LANDUSE), ATMOS_W + LANDUSE_W, SAMPLES)
+        name = args.from_saved.split('/')[-1].split('.')[0]
+        M = Modeler(name, m, len(ATMOS + LANDUSE), SAMPLES)
         for X, Y in DH.get_train_iter(imgtyp=IMGTYP, h=H, w=W):
             M.set_x_y(X, Y.loc[:, ATMOS + LANDUSE].as_matrix()[0], x_transform)
         predictions = predict_with_logic(M.model, M.x_train)
         thresh = get_optimal_threshhold(M.y_train, predictions)
-        write_submission("/output/%s" % submission, M.model, thresh, x_transform)
+        write_submission('/output/%s' % submission, M.model, thresh, x_transform)
 
-
-class StreamToLogger(object):
-    """
-    Fake file-like stream object that redirects writes to a logger instance.
-    """
-    def __init__(self, logger, log_level=logging.INFO):
-        self.logger = logger
-        self.log_level = log_level
-        self.linebuf = ''
-
-    def write(self, buf):
-        for line in buf.rstrip().splitlines():
-            self.logger.log(self.log_level, line.rstrip())
 
 if __name__ == '__main__':
     LOG = logging.getLogger(__name__)
     LOG.setLevel(logging.INFO)
-    logfile = DH.basepath + "/log/" + "planet-kaggle-cnn-v5.log"
+    logfile = DH.basepath + '/log/' + 'planet-kaggle-cnn-v5.log'
     handler = logging.FileHandler(logfile)
     formatter = logging.Formatter('[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s')
     handler.setFormatter(formatter)
     LOG.addHandler(handler)
-    # sys.stdout = StreamToLogger(LOG)
-    # sys.stderr = sys.stdout
 
     # Argument parsing
     parser = argparse.ArgumentParser()
     parser.add_argument('--train', action='store_true')
     parser.add_argument('--test', action='store_true')
-    parser.add_argument('--all', action='store_true')
     parser.add_argument('--from-saved', type=str, default=None)
     parser.add_argument('--from-epoch', type=int, default=0)
     args = parser.parse_args()
