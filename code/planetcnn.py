@@ -22,10 +22,10 @@ LANDUSE = ['primary', 'agriculture', 'road', 'water',
 LANDUSE_W = [1, 2, 2, 2, 4, 4, 8, 8, 8, 8, 8, 8, 8]
 
 
-IMGTYP = 'jpg'
-JPG_128_128_MEAN = (77, 88, 81)
-TIF_128_128_MEAN = (3075, 4271, 4989, 6399)
-MEAN_VALS = TIF_128_128_MEAN if IMGTYP == 'tif' else JPG_128_128_MEAN
+IMGTYP = 'tif'
+JPG_MEAN = (77, 88, 81)
+TIF_MEAN = (3075, 4271, 4989, 6399)
+MEAN_VALS = TIF_MEAN if IMGTYP == 'tif' else JPG_MEAN
 
 H, W, CHANS = 128, 128, 4 if IMGTYP == 'tif' else 3
 IMG_SHAPE = (W, H, CHANS)
@@ -33,7 +33,7 @@ IMG_SHAPE = (W, H, CHANS)
 DH = DataHandler(basepath='/home/kevin.joseph.schiesser/repos/planet-kaggle')
 DH.set_train_labels()
 
-SAMPLES = None
+SAMPLES = 100
 if SAMPLES is None:
     SAMPLES = DH.train_labels.shape[0]
 
@@ -48,6 +48,7 @@ class Modeler(object):
         self.datagen = self.train_datagen()
         self.tb_cb = self.tensorboard_cb()
         self.cp_cb = self.checkpoint_cb()
+        self.el_cb = self.epochlog_cb()
         # self.x_train = np.empty(shape=(self.sample_num, W, H, CHANS), dtype='float32')
         self.x_train = np.empty(shape=(self.sample_num, W, H, CHANS), dtype='int32' if IMGTYP == 'tif' else 'int16')
         self.y_train = np.empty(shape=(self.sample_num, nc), dtype='bool')
@@ -75,6 +76,9 @@ class Modeler(object):
                                                save_weights_only=False,
                                                mode='auto',
                                                period=1)
+
+    def epochlog_cb(self):
+        return EpochLogger(logger=LOG)
 
     def train_datagen(self):
         return keras.preprocessing.image.ImageDataGenerator(
@@ -104,10 +108,10 @@ class Modeler(object):
         self.model.fit_generator(self.datagen.flow(x_train, y_train, batch_size=batch_size),
                                  steps_per_epochs,
                                  epochs=epochs,
-                                 verbose=2,
+                                 verbose=0,
                                  validation_data=(x_val, y_val),
                                  initial_epoch=from_epoch,
-                                 callbacks=[self.tb_cb, self.cp_cb])
+                                 callbacks=[self.tb_cb, self.cp_cb, self.el_cb])
         """
         self.model.fit(x_train, y_train,
                        batch_size=batch_size,
@@ -242,7 +246,7 @@ def main():
     submission = '%s.csv' % name
     if args.train:
         from_epoch = args.from_epoch
-        epochs = from_epoch + 1
+        epochs = from_epoch + 100
         if not args.from_saved:
             m = multi_label_cnn(len(ATMOS + LANDUSE), H, W, CHANS)
         else:
@@ -261,6 +265,14 @@ def main():
         write_submission('/output/%s' % submission, M.model, thresh, x_transform)
 
 
+class EpochLogger(keras.callbacks.Callback):
+    def __init__(self, logger):
+        self.log = logger
+    def on_epoch_end(self, epoch, logs):
+        lr = K.eval(self.model.optimizer.lr)
+        self.log.info("Epoch %s: learning_rate=[%s], loss=[%s], val_loss=[%s]" % (epoch, lr, logs['loss'], logs['val_loss']))
+
+
 if __name__ == '__main__':
     LOG = logging.getLogger(__name__)
     LOG.setLevel(logging.INFO)
@@ -270,11 +282,13 @@ if __name__ == '__main__':
     handler.setFormatter(formatter)
     LOG.addHandler(handler)
 
-    # Argument parsing
     parser = argparse.ArgumentParser()
     parser.add_argument('--train', action='store_true')
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--from-saved', type=str, default=None)
     parser.add_argument('--from-epoch', type=int, default=0)
     args = parser.parse_args()
-    main()
+    try:
+        main()
+    except Exception as e:
+        LOG.error(e)

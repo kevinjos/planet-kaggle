@@ -93,7 +93,7 @@ def multi_label_cnn(nc, h, w, c):
               activation='relu',
               strides=1,
               padding='valid'))
-    model.add(keras.layers.MaxPooling2D(pool_size=(3, 3), strides=2))
+    model.add(keras.layers.MaxPooling2D(pool_size=(2, 2), strides=2))
     model.add(keras.layers.Dropout(0.5))
     model.add(keras.layers.Conv2D(
               filters=64,
@@ -113,7 +113,7 @@ def multi_label_cnn(nc, h, w, c):
               activation='relu',
               strides=1,
               padding='valid'))
-    model.add(keras.layers.MaxPooling2D(pool_size=(3, 3), strides=2))
+    model.add(keras.layers.MaxPooling2D(pool_size=(2, 2), strides=2))
     model.add(keras.layers.Dropout(0.5))
     model.add(keras.layers.Conv2D(
               filters=128,
@@ -133,13 +133,11 @@ def multi_label_cnn(nc, h, w, c):
               activation='relu',
               strides=1,
               padding='valid'))
-    model.add(keras.layers.MaxPooling2D(pool_size=(3, 3), strides=2))
+    model.add(keras.layers.MaxPooling2D(pool_size=(2, 2), strides=2))
     model.add(keras.layers.Dropout(0.5))
     model.add(keras.layers.Flatten())
-    model.add(keras.layers.Dense(4096, activation='relu'))
     model.add(keras.layers.Dense(1024, activation='relu'))
-    model.add(keras.layers.Dense(256, activation='relu'))
-    model.add(keras.layers.Dense(64, activation='relu'))
+    model.add(keras.layers.Dense(1024, activation='relu'))
     model.add(keras.layers.Dense(nc, activation='sigmoid'))
 
     model.compile(loss=keras.losses.binary_crossentropy,
