@@ -72,73 +72,139 @@ def unet(nc, h, w, c):
     return model
 
 
+# Simple baseline cnn
+def multi_label_cnn_(nc, h, w, c):
+    model = keras.models.Sequential()
+    model.add(keras.layers.Conv2D(32, kernel_size=(3, 3),
+                 activation='relu',
+                 input_shape=(h, w, c)))
+    model.add(keras.layers.Conv2D(64, (3, 3), activation='relu'))
+    model.add(keras.layers.MaxPooling2D(pool_size=(2, 2)))
+    model.add(keras.layers.Dropout(0.25))
+    model.add(keras.layers.Flatten())
+    model.add(keras.layers.Dense(128, activation='relu'))
+    model.add(keras.layers.Dropout(0.5))
+    model.add(keras.layers.Dense(nc, activation='sigmoid'))
+    model.compile(loss=keras.losses.binary_crossentropy,
+                  optimizer='adam')
+    return model
+
 def multi_label_cnn(nc, h, w, c):
     model = keras.models.Sequential()
     model.add(keras.layers.Conv2D(
-              filters=32,
+              filters=64,
               kernel_size=(3, 3),
               activation='relu',
               strides=1,
-              padding='valid',
+              kernel_initializer='he_normal',
+              padding='same',
               input_shape=(h, w, c)))
     model.add(keras.layers.Conv2D(
-              filters=32,
-              kernel_size=(3, 3),
-              activation='relu',
-              strides=1,
-              padding='valid'))
-    model.add(keras.layers.Conv2D(
-              filters=32,
-              kernel_size=(3, 3),
-              activation='relu',
-              strides=1,
-              padding='valid'))
-    model.add(keras.layers.MaxPooling2D(pool_size=(2, 2), strides=2))
-    model.add(keras.layers.Dropout(0.5))
-    model.add(keras.layers.Conv2D(
               filters=64,
               kernel_size=(3, 3),
               activation='relu',
               strides=1,
-              padding='valid'))
-    model.add(keras.layers.Conv2D(
-              filters=64,
-              kernel_size=(3, 3),
-              activation='relu',
-              strides=1,
-              padding='valid'))
-    model.add(keras.layers.Conv2D(
-              filters=64,
-              kernel_size=(3, 3),
-              activation='relu',
-              strides=1,
-              padding='valid'))
-    model.add(keras.layers.MaxPooling2D(pool_size=(2, 2), strides=2))
-    model.add(keras.layers.Dropout(0.5))
+              kernel_initializer='he_normal',
+              padding='same'))
+    model.add(keras.layers.MaxPooling2D(pool_size=(2, 2),
+                                        strides=2))
     model.add(keras.layers.Conv2D(
               filters=128,
               kernel_size=(3, 3),
               activation='relu',
               strides=1,
-              padding='valid'))
+              kernel_initializer='he_normal',
+              padding='same'))
     model.add(keras.layers.Conv2D(
               filters=128,
               kernel_size=(3, 3),
               activation='relu',
               strides=1,
-              padding='valid'))
+              kernel_initializer='he_normal',
+              padding='same'))
+    model.add(keras.layers.MaxPooling2D(pool_size=(2, 2),
+                                        strides=2))
     model.add(keras.layers.Conv2D(
-              filters=128,
+              filters=256,
               kernel_size=(3, 3),
               activation='relu',
               strides=1,
-              padding='valid'))
-    model.add(keras.layers.MaxPooling2D(pool_size=(2, 2), strides=2))
-    model.add(keras.layers.Dropout(0.5))
+              kernel_initializer='he_normal',
+              padding='same'))
+    model.add(keras.layers.Conv2D(
+              filters=256,
+              kernel_size=(3, 3),
+              activation='relu',
+              strides=1,
+              kernel_initializer='he_normal',
+              padding='same'))
+    model.add(keras.layers.Conv2D(
+              filters=256,
+              kernel_size=(3, 3),
+              activation='relu',
+              strides=1,
+              kernel_initializer='he_normal',
+              padding='same'))
+    model.add(keras.layers.MaxPooling2D(pool_size=(2, 2),
+                                        strides=2))
+    model.add(keras.layers.Conv2D(
+              filters=512,
+              kernel_size=(3, 3),
+              activation='relu',
+              strides=1,
+              kernel_initializer='he_normal',
+              padding='same'))
+    model.add(keras.layers.Conv2D(
+              filters=512,
+              kernel_size=(3, 3),
+              activation='relu',
+              strides=1,
+              kernel_initializer='he_normal',
+              padding='same'))
+    model.add(keras.layers.Conv2D(
+              filters=512,
+              kernel_size=(3, 3),
+              activation='relu',
+              strides=1,
+              kernel_initializer='he_normal',
+              padding='same'))
+    model.add(keras.layers.MaxPooling2D(pool_size=(2, 2),
+                                        strides=2))
+    model.add(keras.layers.Conv2D(
+              filters=512,
+              kernel_size=(3, 3),
+              activation='relu',
+              strides=1,
+              kernel_initializer='he_normal',
+              padding='same'))
+    model.add(keras.layers.Conv2D(
+              filters=512,
+              kernel_size=(3, 3),
+              activation='relu',
+              strides=1,
+              kernel_initializer='he_normal',
+              padding='same'))
+    model.add(keras.layers.Conv2D(
+              filters=512,
+              kernel_size=(3, 3),
+              activation='relu',
+              strides=1,
+              kernel_initializer='he_normal',
+              padding='same'))
+    model.add(keras.layers.MaxPooling2D(pool_size=(2, 2),
+                                        strides=2))
     model.add(keras.layers.Flatten())
-    model.add(keras.layers.Dense(1024, activation='relu'))
-    model.add(keras.layers.Dense(1024, activation='relu'))
-    model.add(keras.layers.Dense(nc, activation='sigmoid'))
+    model.add(keras.layers.Dense(4096,
+                                 kernel_initializer='he_normal',
+                                 activation='relu'))
+    model.add(keras.layers.Dropout(0.5))
+    model.add(keras.layers.Dense(4096,
+                                 kernel_initializer='he_normal',
+                                 activation='relu'))
+    model.add(keras.layers.Dropout(0.5))
+    model.add(keras.layers.Dense(nc,
+                                 # kernel_initializer='truncated_normal',
+                                 activation='sigmoid'))
 
     model.compile(loss=keras.losses.binary_crossentropy,
                   optimizer='adam')

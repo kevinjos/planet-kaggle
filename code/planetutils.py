@@ -55,6 +55,7 @@ class FileHandler(object):
             name = fn.split(".")[0]
             img = cv2.imread(path + "/" + fn, -1)
             img = cv2.resize(img, (h, w))
+            # img = img >> 1 # Drop the least significant bit in preparation for transformation to int16 or int8
             yield((name, img))
 
 

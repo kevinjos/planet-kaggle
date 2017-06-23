@@ -23,14 +23,12 @@ LANDUSE_W = [1, 2, 2, 2, 4, 4, 8, 8, 8, 8, 8, 8, 8]
 
 
 IMGTYP = 'tif'
-JPG_MEAN = (77, 88, 81)
-TIF_MEAN = (3075, 4271, 4989, 6399)
-MEAN_VALS = TIF_MEAN if IMGTYP == 'tif' else JPG_MEAN
 
 H, W, CHANS = 128, 128, 4 if IMGTYP == 'tif' else 3
 IMG_SHAPE = (W, H, CHANS)
 
-DH = DataHandler(basepath='/home/kevin.joseph.schiesser/repos/planet-kaggle')
+DH = DataHandler(basepath='/mnt/planet-kaggle')
+
 DH.set_train_labels()
 
 SAMPLES = 100
@@ -49,8 +47,7 @@ class Modeler(object):
         self.tb_cb = self.tensorboard_cb()
         self.cp_cb = self.checkpoint_cb()
         self.el_cb = self.epochlog_cb()
-        # self.x_train = np.empty(shape=(self.sample_num, W, H, CHANS), dtype='float32')
-        self.x_train = np.empty(shape=(self.sample_num, W, H, CHANS), dtype='int32' if IMGTYP == 'tif' else 'int16')
+        self.x_train = np.empty(shape=(self.sample_num, W, H, CHANS), dtype='float32')
         self.y_train = np.empty(shape=(self.sample_num, nc), dtype='bool')
         self.sample_counter = 0
 
@@ -72,10 +69,10 @@ class Modeler(object):
         mkdir(modeldir)
         cp_fn = '{epoch:03d}-{val_loss:.5f}.hdf5'
         return keras.callbacks.ModelCheckpoint(modeldir + cp_fn, monitor='val_loss',
-                                               save_best_only=False,
+                                               save_best_only=True,
                                                save_weights_only=False,
                                                mode='auto',
-                                               period=1)
+                                               period=2)
 
     def epochlog_cb(self):
         return EpochLogger(logger=LOG)
@@ -90,7 +87,6 @@ class Modeler(object):
             horizontal_flip=True)
 
     def set_x_y(self, x, y, x_transform):
-        # self.x_train[self.sample_counter % self.sample_num] = x / (np.power(2, 16) - 1.)
         self.x_train[self.sample_counter % self.sample_num] = x_transform(x)
         self.y_train[self.sample_counter % self.sample_num] = y
         self.sample_counter += 1
@@ -101,9 +97,14 @@ class Modeler(object):
         samples = samples_total - split
         x_val, y_val = self.x_train[:split], self.y_train[:split]
         x_train, y_train = self.x_train[split:], self.y_train[split:]
-        batch_size = 32
+        x_train_mean_c = np.mean(x_train, axis=(0, 1, 2))
+        x_train_std_c = np.std(x_train, axis=(0, 1, 2))
+        self.x_train -= x_train_mean_c
+        self.x_train /= x_train_std_c
+        batch_size = 128
         LOG.info('Training with data generation for model=[%s]' % self.name)
         LOG.info('train samples=[%s], validation samples=[%s], batch size=[%s], epochs=[%s]' % (samples, split, batch_size, epochs))
+        LOG.info('train data channel means=%s & stdev=%s' % (x_train_mean_c, x_train_std_c))
         steps_per_epochs = samples // batch_size
         self.model.fit_generator(self.datagen.flow(x_train, y_train, batch_size=batch_size),
                                  steps_per_epochs,
@@ -111,6 +112,7 @@ class Modeler(object):
                                  verbose=0,
                                  validation_data=(x_val, y_val),
                                  initial_epoch=from_epoch,
+                                 # callbacks=[self.el_cb])
                                  callbacks=[self.tb_cb, self.cp_cb, self.el_cb])
         """
         self.model.fit(x_train, y_train,
@@ -241,8 +243,8 @@ def train(M, epochs, x_transform, from_epoch=0):
 
 
 def main():
-    x_transform = lambda x: x - MEAN_VALS
-    name = '3-c3x3_32-64-128_mp3x3-2-%s' % IMGTYP
+    x_transform = lambda x: x
+    name = 'vgg16-he-wi-%s' % IMGTYP
     submission = '%s.csv' % name
     if args.train:
         from_epoch = args.from_epoch
@@ -270,8 +272,7 @@ class EpochLogger(keras.callbacks.Callback):
         self.log = logger
     def on_epoch_end(self, epoch, logs):
         t = self.model.optimizer.iterations + 1
-        lr = K.eval(self.model.optimizer.lr * (K.sqrt(1. - K.pow(self.model.optimizer.beta_2, t)) / (1. - K.pow(self.model.optimizer.beta_1, t))))
-        self.log.info("Epoch %s: learning_rate=[%s], loss=[%s], val_loss=[%s]" % (epoch, lr, logs['loss'], logs['val_loss']))
+        self.log.info("Epoch %s: loss=[%s], val_loss=[%s]" % (epoch, logs['loss'], logs['val_loss']))
 
 
 if __name__ == '__main__':
@@ -292,4 +293,4 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as e:
-        LOG.error(e)
+        LOG.error("Exception: %s" % e, exc_info=True)
