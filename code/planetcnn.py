@@ -22,16 +22,18 @@ LANDUSE = ['primary', 'agriculture', 'road', 'water',
 LANDUSE_W = [1, 2, 2, 2, 4, 4, 8, 8, 8, 8, 8, 8, 8]
 
 
-IMGTYP = 'tif'
+IMGTYP = 'jpg'
 
 H, W, CHANS = 128, 128, 4 if IMGTYP == 'tif' else 3
 IMG_SHAPE = (W, H, CHANS)
 
-DH = DataHandler(basepath='/mnt/planet-kaggle')
+input_basepath = '/opt/planet-kaggle'
+output_basepath = '/mnt/planet-kaggle'
+DH = DataHandler(basepath=input_basepath)
 
 DH.set_train_labels()
 
-SAMPLES = 100
+SAMPLES = None
 if SAMPLES is None:
     SAMPLES = DH.train_labels.shape[0]
 
@@ -55,16 +57,16 @@ class Modeler(object):
         return self.name
 
     # Setup tensorboard callbacks
-    def tensorboard_cb(self, basepath=DH.basepath):
+    def tensorboard_cb(self, basepath=output_basepath):
         graphdir = basepath + '/graph/' + self.name + '/'
         mkdir(graphdir)
         return keras.callbacks.TensorBoard(log_dir=graphdir,
-                                           histogram_freq=10,
+                                           histogram_freq=25,
                                            write_graph=True,
                                            write_images=False)
 
     # Setup model checkpoint callbacks
-    def checkpoint_cb(self, basepath=DH.basepath):
+    def checkpoint_cb(self, basepath=output_basepath):
         modeldir = basepath + '/model/' + self.name + '/'
         mkdir(modeldir)
         cp_fn = '{epoch:03d}-{val_loss:.5f}.hdf5'
@@ -72,7 +74,7 @@ class Modeler(object):
                                                save_best_only=True,
                                                save_weights_only=False,
                                                mode='auto',
-                                               period=2)
+                                               period=1)
 
     def epochlog_cb(self):
         return EpochLogger(logger=LOG)
@@ -112,7 +114,6 @@ class Modeler(object):
                                  verbose=0,
                                  validation_data=(x_val, y_val),
                                  initial_epoch=from_epoch,
-                                 # callbacks=[self.el_cb])
                                  callbacks=[self.tb_cb, self.cp_cb, self.el_cb])
         """
         self.model.fit(x_train, y_train,
@@ -248,7 +249,7 @@ def main():
     submission = '%s.csv' % name
     if args.train:
         from_epoch = args.from_epoch
-        epochs = from_epoch + 100
+        epochs = from_epoch + 110
         if not args.from_saved:
             m = multi_label_cnn(len(ATMOS + LANDUSE), H, W, CHANS)
         else:
@@ -278,7 +279,7 @@ class EpochLogger(keras.callbacks.Callback):
 if __name__ == '__main__':
     LOG = logging.getLogger(__name__)
     LOG.setLevel(logging.INFO)
-    logfile = DH.basepath + '/log/' + 'planet-kaggle-cnn-v5.log'
+    logfile = output_basepath + '/log/' + 'planet-kaggle-cnn-v5.log'
     handler = logging.FileHandler(logfile)
     formatter = logging.Formatter('[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s')
     handler.setFormatter(formatter)

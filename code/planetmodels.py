@@ -207,5 +207,5 @@ def multi_label_cnn(nc, h, w, c):
                                  activation='sigmoid'))
 
     model.compile(loss=keras.losses.binary_crossentropy,
-                  optimizer='adam')
+                  optimizer='adam', metrics=['loss', 'val_loss'])
     return model
