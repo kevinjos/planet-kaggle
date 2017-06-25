@@ -22,13 +22,15 @@ LANDUSE = ['primary', 'agriculture', 'road', 'water',
 LANDUSE_W = [1, 2, 2, 2, 4, 4, 8, 8, 8, 8, 8, 8, 8]
 
 
-IMGTYP = 'jpg'
+IMGTYP = 'tif'
 
 H, W, CHANS = 128, 128, 4 if IMGTYP == 'tif' else 3
 IMG_SHAPE = (W, H, CHANS)
 
-input_basepath = '/opt/planet-kaggle'
-output_basepath = '/mnt/planet-kaggle'
+# input_basepath = '/opt/planet-kaggle'
+# output_basepath = '/mnt/planet-kaggle'
+input_basepath = '/Users/kjs/repos/planet'
+output_basepath = input_basepath
 DH = DataHandler(basepath=input_basepath)
 
 DH.set_train_labels()
@@ -88,8 +90,8 @@ class Modeler(object):
             height_shift_range=0.2,
             horizontal_flip=True)
 
-    def set_x_y(self, x, y, x_transform):
-        self.x_train[self.sample_counter % self.sample_num] = x_transform(x)
+    def set_x_y(self, x, y):
+        self.x_train[self.sample_counter % self.sample_num] = x
         self.y_train[self.sample_counter % self.sample_num] = y
         self.sample_counter += 1
 
@@ -220,12 +222,16 @@ def predict_with_logic(m, x):
     return Y
 
 
-def write_submission(outputpath, m, thresh, x_transform):
+def write_submission(outputpath, m, thresh, mean, std):
+    mean = np.array(mean, dtype='float32')
+    std = np.array(std, dtype='float32')
     maxn = None if SAMPLES > 10000 else 100
     with open(DH.basepath + outputpath, 'w') as fp:
         fp.write('image_name,tags\n')
         for name, X in DH.get_test_iter(imgtyp=IMGTYP, h=H, w=W, maxn=maxn):
-            X = x_transform(X)
+            X = np.array(X, dtype='float32')
+            X -= mean
+            X /= std
             p = prediction(m, X, thresh)
             fp.write('%s,%s\n' % (name, p))
 
@@ -235,16 +241,15 @@ def mkdir(d):
         os.mkdir(d)
 
 
-def train(M, epochs, x_transform, from_epoch=0):
+def train(M, epochs, from_epoch=0):
     LOG.info('Starting training run with samples=[%s]' % SAMPLES)
     for X, Y in DH.get_train_iter(imgtyp=IMGTYP, h=H, w=W, maxn=SAMPLES):
-        M.set_x_y(X, Y.loc[:, ATMOS + LANDUSE].as_matrix()[0], x_transform)
+        M.set_x_y(X, Y.loc[:, ATMOS + LANDUSE].as_matrix()[0])
     thresh = M.fit_full_datagen(epochs=epochs, from_epoch=from_epoch)
     return thresh
 
 
 def main():
-    x_transform = lambda x: x
     name = 'vgg16-he-wi-%s' % IMGTYP
     submission = '%s.csv' % name
     if args.train:
@@ -256,23 +261,24 @@ def main():
             LOG.info('Loading model %s' % args.from_saved)
             m = keras.models.load_model(args.from_saved)
         M = Modeler(name, m, len(ATMOS + LANDUSE), SAMPLES)
-        train(M, epochs, x_transform, from_epoch=from_epoch)
+        train(M, epochs, from_epoch=from_epoch)
     elif args.test:
-        m = keras.models.load_model(args.from_saved)
-        name = args.from_saved.split('/')[-1].split('.')[0]
+        thresh = args.thresh
+        mean = args.mean
+        std = args.std
+        model_fn = args.from_saved
+        LOG.info("loading model=[%s]" % model_fn)
+        m = keras.models.load_model(model_fn)
+        name = model_fn.split('/')[-1].split('.')[0]
         M = Modeler(name, m, len(ATMOS + LANDUSE), SAMPLES)
-        for X, Y in DH.get_train_iter(imgtyp=IMGTYP, h=H, w=W):
-            M.set_x_y(X, Y.loc[:, ATMOS + LANDUSE].as_matrix()[0], x_transform)
-        predictions = predict_with_logic(M.model, M.x_train)
-        thresh = get_optimal_threshhold(M.y_train, predictions)
-        write_submission('/output/%s' % submission, M.model, thresh, x_transform)
+        write_submission('/output/%s' % submission, M.model, thresh, mean, std)
 
 
 class EpochLogger(keras.callbacks.Callback):
     def __init__(self, logger):
         self.log = logger
+
     def on_epoch_end(self, epoch, logs):
-        t = self.model.optimizer.iterations + 1
         self.log.info("Epoch %s: loss=[%s], val_loss=[%s]" % (epoch, logs['loss'], logs['val_loss']))
 
 
@@ -290,6 +296,9 @@ if __name__ == '__main__':
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--from-saved', type=str, default=None)
     parser.add_argument('--from-epoch', type=int, default=0)
+    parser.add_argument('--thresh', type=float, nargs='+')
+    parser.add_argument('--mean', type=float, nargs='+')
+    parser.add_argument('--std', type=float, nargs='+')
     args = parser.parse_args()
     try:
         main()
