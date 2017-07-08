@@ -27,10 +27,10 @@ IMGTYP = 'tif'
 H, W, CHANS = 128, 128, 4 if IMGTYP == 'tif' else 3
 IMG_SHAPE = (W, H, CHANS)
 
-# input_basepath = '/opt/planet-kaggle'
-# output_basepath = '/mnt/planet-kaggle'
-input_basepath = '/Users/kjs/repos/planet'
-output_basepath = input_basepath
+input_basepath = '/opt/planet-kaggle'
+output_basepath = '/mnt/planet-kaggle'
+# input_basepath = '/Users/kjs/repos/planet'
+# output_basepath = input_basepath
 DH = DataHandler(basepath=input_basepath)
 
 DH.set_train_labels()
@@ -97,7 +97,7 @@ class Modeler(object):
 
     def fit_full_datagen(self, epochs, from_epoch=0):
         samples_total = len(self.y_train)
-        split = int(samples_total * .2)
+        split = int(samples_total * .3)
         samples = samples_total - split
         x_val, y_val = self.x_train[:split], self.y_train[:split]
         x_train, y_train = self.x_train[split:], self.y_train[split:]
@@ -126,8 +126,8 @@ class Modeler(object):
                        initial_epoch=from_epoch,
                        callbacks=[self.tb_cb, self.cp_cb])
         """
-        y_train_predict = predict_with_logic(self.model, self.x_train)
-        thresh = get_optimal_threshhold(self.y_train, y_train_predict)
+        y_val_predict = predict_with_logic(self.model, x_val)
+        thresh = get_optimal_threshhold(y_val, y_val_predict)
         return thresh
 
     def checkpoint(self):
@@ -138,23 +138,19 @@ class Modeler(object):
 
 
 def fbeta(true_label, prediction):
-    return fbeta_score(true_label, prediction, beta=2, average='samples')
+    return fbeta_score(true_label, prediction, beta=2, average='binary')
 
 
 def get_optimal_threshhold(true_label, prediction, iterations=1000):
-    best_threshhold = [0.2] * len(LANDUSE)
-    for t in range(len(LANDUSE)):
+    best_threshhold = [0.0 for x in range(len(ATMOS) + len(LANDUSE))]
+    for t in range(len(ATMOS) + len(LANDUSE)):
         best_fbeta = 0
-        temp_threshhold = [0.2] * len(LANDUSE)
         for i in range(1, iterations + 1):
             temp_value = i / float(iterations)
-            temp_threshhold[t] = temp_value
-            temp_fbeta = fbeta(true_label[:, len(ATMOS):], prediction[:, len(ATMOS):] > temp_threshhold)
+            temp_fbeta = fbeta(true_label[:, t], prediction[:, t] > temp_value)
             if temp_fbeta > best_fbeta:
                 best_fbeta = temp_fbeta
                 best_threshhold[t] = temp_value
-    # Always use 0.5 for the atmos threshold since it's already assumed to be 0 or 1 by now
-    best_threshhold = [0.5, 0.5, 0.5, 0.5] + best_threshhold
     LOG.info('Using thresholds: %s' % best_threshhold)
     labels_list = ATMOS + LANDUSE
     cm = dict(zip(labels_list + ['all'], [{'tp': 0, 'fp': 0, 'tn': 0, 'fn': 0} for x in range(len(ATMOS + LANDUSE) + 1)]))
@@ -208,27 +204,25 @@ def prediction(M, X, thresh):
 
 
 def predict_with_logic(m, x):
-    Y = m.predict(x)
+    Y = m.predict(x, verbose=1)
     for idy, y in enumerate(Y):
         # Chose the most likely single atmospheric condition
         atmos_label_idx = np.argmax(y[:len(ATMOS)])
-        y[atmos_label_idx] = 1
-        y[:atmos_label_idx] = 0
-        y[atmos_label_idx + 1:len(ATMOS)] = 0
+        y[atmos_label_idx] = 1.0
+        y[:atmos_label_idx] = 0.0
+        y[atmos_label_idx + 1:len(ATMOS)] = 0.0
         # If it's cloudly, then there are no land-use labels
         if atmos_label_idx == 3:
-            y[4:] = 0
+            y[4:] = 0.0
         Y[idy] = y
     return Y
 
 
 def write_submission(outputpath, m, thresh, mean, std):
-    mean = np.array(mean, dtype='float32')
-    std = np.array(std, dtype='float32')
     maxn = None if SAMPLES > 10000 else 100
-    with open(DH.basepath + outputpath, 'w') as fp:
+    with open(output_basepath + outputpath, 'w') as fp:
         fp.write('image_name,tags\n')
-        for name, X in DH.get_test_iter(imgtyp=IMGTYP, h=H, w=W, maxn=maxn):
+        for name, X in DH.get_test_iter(imgtyp=IMGTYP, h=H, w=W, maxn=maxn, custom_path=output_basepath + "/test-data/"):
             X = np.array(X, dtype='float32')
             X -= mean
             X /= std
@@ -250,11 +244,12 @@ def train(M, epochs, from_epoch=0):
 
 
 def main():
-    name = 'vgg16-he-wi-%s' % IMGTYP
+    # name = 'vgg16-he-wi-%s' % IMGTYP
+    name = 'test-%s' % IMGTYP
     submission = '%s.csv' % name
     if args.train:
         from_epoch = args.from_epoch
-        epochs = from_epoch + 110
+        epochs = from_epoch + 1
         if not args.from_saved:
             m = multi_label_cnn(len(ATMOS + LANDUSE), H, W, CHANS)
         else:
@@ -264,13 +259,16 @@ def main():
         train(M, epochs, from_epoch=from_epoch)
     elif args.test:
         thresh = args.thresh
-        mean = args.mean
-        std = args.std
+        mean = np.array(args.mean, dtype='float32')
+        std = np.array(args.std, dtype='float32')
         model_fn = args.from_saved
-        LOG.info("loading model=[%s]" % model_fn)
-        m = keras.models.load_model(model_fn)
+        m = keras.models.load_model(model_fn, compile=False)
         name = model_fn.split('/')[-1].split('.')[0]
         M = Modeler(name, m, len(ATMOS + LANDUSE), SAMPLES)
+        LOG.info("loading model=[%s]" % M)
+        LOG.info("Using thresh=[%s]" % thresh)
+        LOG.info("Using mean=[%s]" % mean)
+        LOG.info("Using std=[%s]" % std)
         write_submission('/output/%s' % submission, M.model, thresh, mean, std)
 
 
