@@ -9,7 +9,7 @@ import os
 import argparse
 
 from planetutils import DataHandler, mkdir
-from planetmodels import multi_label_cnn, pretrained, unet
+from planetmodels import multi_label_cnn_, pretrained, unet
 
 
 ATMOS = ['clear', 'partly_cloudy', 'haze', 'cloudy']
@@ -91,7 +91,8 @@ class Modeler(object):
             self.x_mean = np.mean(self.x_train, axis=(0, 1, 2))
         if std is None:
             self.x_std = np.std(self.x_train, axis=(0, 1, 2))
-        LOG.info("By-channel mean=[%s] and std=[%s]" % (self.x_mean, self.x_std))
+        LOG.info("By-channel mean=%s" % (self.x_mean))
+        LOG.info("By-channel std=%s" % (self.x_std))
 
     def set_train_norm(self):
         self.x_train -= self.x_mean
@@ -121,12 +122,12 @@ class Modeler(object):
 
     def predict_test(self):
         Y = self.model.predict(self.x_test)
-        np.apply_along_axis(atmos_prediction, Y)
+        np.apply_along_axis(atmos_prediction, 1, Y)
         return Y > self.thresh
 
     def predict_val(self):
         Y = self.model.predict(self.x_val)
-        np.apply_along_axis(atmos_prediction, Y)
+        np.apply_along_axis(atmos_prediction, 1, Y)
         return Y
 
 
@@ -210,6 +211,7 @@ class EpochLogger(keras.callbacks.Callback):
 
 def main():
     maxn = None
+    epochs = 10
     DH = DataHandler(input_basepath=input_basepath)
     # Load in a model either from a file or from scratch
     if args.from_saved is not None:
@@ -219,27 +221,37 @@ def main():
     else:
         name = '{model_name}-{img_typ}'.format(model_name='foo', img_typ=IMGTYP)
         LOG.info('Initializing model=[%s]' % name)
-        m = multi_label_cnn(LABELS_N, H, W, CHANS)
+        m = multi_label_cnn_(LABELS_N, H, W, CHANS)
     M = Modeler(name, m, output_basepath)
     if args.train:
+        maxn = maxn if maxn is not None else DH.train_n
+        LOG.info('Loading train data...')
         train_iter = DH.get_train_iter(imgtyp=IMGTYP, h=H, w=W, maxn=maxn)
         M.x_train = np.empty(shape=(maxn, W, H, CHANS), dtype='float32')
         M.y_train = np.empty(shape=(maxn, LABELS_N), dtype='bool')
         for i, (x, y) in enumerate(train_iter):
             M.x_train[i] = x
             M.y_train[i] = y.loc[:, LABELS].as_matrix()[0]
-        M.set_validation_split()
+            if i % 1000 == 0:
+                LOG.info('samples loaded=[%s]' % i + 1)
+        LOG.info('Loading train data complete')
+        M.set_validation_split(validation_fraction=0.3)
         M.set_mean_and_std()
         M.set_train_norm()
-        M.fit_full_datagen(epochs=args.from_epoch + 100, from_epoch=args.from_epoch, batch_size=128)
+        M.fit_full_datagen(epochs=args.from_epoch + epochs, from_epoch=args.from_epoch, batch_size=32)
         M.set_threshholds()
     elif args.test:
+        maxn = maxn if maxn is not None else DH.test_n
+        LOG.info('Loading test data...')
         test_iter = DH.get_test_iter(imgtyp=IMGTYP, h=H, w=W, maxn=maxn)
         M.x_test = np.empty(shape=(maxn, W, H, CHANS), dtype='float32')
         names = np.empty(shape=(maxn), dtype='S10')
         for i, (name, x) in enumerate(test_iter):
             M.x_test[i] = x
             names[i] = name
+            if i % 1000 == 0:
+                LOG.info('samples loaded=[%s]' % i + 1)
+        LOG.info('Loading test data complete')
         M.set_mean_and_std(mean=np.array(args.mean, dtype='float32'), std=np.array(args.std, dtype='float32'))
         M.set_test_norm()
         M.set_treshholds(thresh=np.array(args.thresh, dtype='float32'))

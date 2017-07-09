@@ -62,6 +62,7 @@ class DataHandler(FileHandler):
     def __init__(self, **kwargs):
         super(DataHandler, self).__init__(**kwargs)
         self.train_labels = None
+        self.set_train_labels()
 
     def set_train_labels(self):
         train_labels_raw = self._get_train_labels()
