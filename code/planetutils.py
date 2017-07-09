@@ -5,26 +5,27 @@ import os
 import random
 
 
+def mkdir(d):
+    if not os.path.exists(d):
+        os.mkdir(d)
+
+
 class FileHandler(object):
-    def __init__(self, basepath="/Users/kjs/repos/planet"):
+    def __init__(self, input_basepath="/Users/kjs/repos/planet"):
         # Directories
-        self.basepath = basepath
-        self.path = basepath + "/input"
-        self.train_tif = "train-tif-v2"
+        self.basepath = input_basepath
+        self.path = self.basepath + "/input"
+        self.train_tif = "train-tif"
+        self.test_jpg = "test-jpg"
         self.train_jpg = "train-jpg"
-        self.validation_jpg = "validation-jpg"
-        self.test_tif = "test-tif-v2"
-        self.test_jpg = "test-jpg-v2"
+        self.test_tif = "test-tif"
         # Files
         self.train_labels_csv = "train_v2.csv"
-        # Data
-        self._train_labels = None
-        self._train_cached = False
-        self.train_cache = {}
+        # Stats
+        self.train_n = 40479
+        self.test_n = 61191
 
-    def _set_train_labels(self):
-        if self._train_labels is not None:
-            return
+    def _get_train_labels(self):
         with open(self.path + "/" + self.train_labels_csv, "r") as fp:
             res = {}
             fp.readline()  # Skip the header
@@ -32,10 +33,9 @@ class FileHandler(object):
                 k, v = l.split(",")
                 v = v.strip().split(" ")
                 res[k] = v
-        self._train_labels = res
-        return
+        return res
 
-    def _get_iter(self, samp, imgtyp="tif", h=256, w=256, maxn=None, custom_path=None):
+    def _get_iter(self, samp, imgtyp="tif", h=256, w=256, maxn=None):
         expected_samp = ("train", "test")
         expected_imgtyp = ("jpg", "tif")
         path = self.path + "/"
@@ -46,22 +46,15 @@ class FileHandler(object):
         elif samp == "train" and imgtyp == "jpg":
             path += self.train_jpg
         elif samp == "test" and imgtyp == "tif":
-            if not custom_path:
-                path = self.basepath + "/data/v2/" + self.test_tif
-            else:
-                path = custom_path + imgtyp
+            path = self.basepath + "/data/v2/" + self.test_tif
         elif samp == "test" and imgtyp == "jpg":
-            if not custom_path:
-                path = self.basepath + "/data/v2/" + self.test_jpg
-            else:
-                path = custom_path + imgtyp
+            path = self.basepath + "/data/v2/" + self.test_jpg
         files = os.listdir(path)
         random.shuffle(files)
         for fn in files[:maxn]:
             name = fn.split(".")[0]
             img = cv2.imread(path + "/" + fn, -1)
             img = cv2.resize(img, (h, w))
-            # img = img >> 1 # Drop the least significant bit in preparation for transformation to int16 or int8
             yield((name, img))
 
 
@@ -71,15 +64,13 @@ class DataHandler(FileHandler):
         self.train_labels = None
 
     def set_train_labels(self):
-        if self.train_labels is not None:
-            return
-        self._set_train_labels()
+        train_labels_raw = self._get_train_labels()
         pd_encoded = {"name": []}
-        for k, v in self._train_labels.iteritems():
+        for k, v in train_labels_raw.iteritems():
             for t in v:
                 if t not in pd_encoded:
                     pd_encoded[t] = []
-        for k, v in self._train_labels.iteritems():
+        for k, v in train_labels_raw.iteritems():
             for pd_k in pd_encoded.keys():
                 if pd_k == "name":
                     pd_encoded["name"].append(k)
@@ -94,6 +85,6 @@ class DataHandler(FileHandler):
             Y = self.train_labels.loc[self.train_labels["name"] == name]
             yield (X, Y)
 
-    def get_test_iter(self, imgtyp="tif", h=256, w=256, maxn=None, custom_path=None):
-        test_iter = self._get_iter("test", imgtyp=imgtyp, h=h, w=w, maxn=maxn, custom_path=custom_path)
+    def get_test_iter(self, imgtyp="tif", h=256, w=256, maxn=None):
+        test_iter = self._get_iter("test", imgtyp=imgtyp, h=h, w=w, maxn=maxn)
         return test_iter

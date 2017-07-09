@@ -8,59 +8,44 @@ import logging
 import os
 import argparse
 
-from planetutils import DataHandler
+from planetutils import DataHandler, mkdir
 from planetmodels import multi_label_cnn, pretrained, unet
 
 
-ATMOS = ['clear',
-         'partly_cloudy',
-         'haze', 'cloudy']
-ATMOS_W = [1, 2, 4, 4]
-LANDUSE = ['primary', 'agriculture', 'road', 'water',
-           'cultivation', 'habitation',
-           'bare_ground', 'artisinal_mine', 'blooming', 'blow_down', 'selective_logging', 'slash_burn', 'conventional_mine']
-LANDUSE_W = [1, 2, 2, 2, 4, 4, 8, 8, 8, 8, 8, 8, 8]
-
-
+ATMOS = ['clear', 'partly_cloudy', 'haze', 'cloudy']
+LANDUSE = ['primary', 'agriculture', 'road', 'water', 'cultivation', 'habitation', 'bare_ground',
+           'artisinal_mine', 'blooming', 'blow_down', 'selective_logging', 'slash_burn', 'conventional_mine']
+LABELS = ATMOS + LANDUSE
+LABELS_N = len(LABELS)
 IMGTYP = 'tif'
-
 H, W, CHANS = 128, 128, 4 if IMGTYP == 'tif' else 3
 IMG_SHAPE = (W, H, CHANS)
-
-input_basepath = '/opt/planet-kaggle'
-output_basepath = '/mnt/planet-kaggle'
-# input_basepath = '/Users/kjs/repos/planet'
-# output_basepath = input_basepath
-DH = DataHandler(basepath=input_basepath)
-
-DH.set_train_labels()
-
-SAMPLES = None
-if SAMPLES is None:
-    SAMPLES = DH.train_labels.shape[0]
 
 
 class Modeler(object):
 
-    def __init__(self, name, model, nc, sample_num, cw=None):
+    def __init__(self, name, model, output_basepath):
         self.name = name
         self.model = model
-        self.class_weight = cw
-        self.sample_num = sample_num
+        self.basepath = output_basepath
+        # Image remixer
         self.datagen = self.train_datagen()
+        # Keras modeling callbacks
         self.tb_cb = self.tensorboard_cb()
         self.cp_cb = self.checkpoint_cb()
         self.el_cb = self.epochlog_cb()
-        self.x_train = np.empty(shape=(self.sample_num, W, H, CHANS), dtype='float32')
-        self.y_train = np.empty(shape=(self.sample_num, nc), dtype='bool')
-        self.sample_counter = 0
-
-    def __repr__(self):
-        return self.name
+        # Data
+        self.x_train = None
+        self.x_val = None
+        self.y_train = None
+        self.y_val = None
+        self.x_test = None
+        self.x_mean = None
+        self.x_std = None
 
     # Setup tensorboard callbacks
-    def tensorboard_cb(self, basepath=output_basepath):
-        graphdir = basepath + '/graph/' + self.name + '/'
+    def tensorboard_cb(self):
+        graphdir = self.basepath + '/graph/' + self.name + '/'
         mkdir(graphdir)
         return keras.callbacks.TensorBoard(log_dir=graphdir,
                                            histogram_freq=25,
@@ -68,8 +53,8 @@ class Modeler(object):
                                            write_images=False)
 
     # Setup model checkpoint callbacks
-    def checkpoint_cb(self, basepath=output_basepath):
-        modeldir = basepath + '/model/' + self.name + '/'
+    def checkpoint_cb(self):
+        modeldir = self.basepath + '/model/' + self.name + '/'
         mkdir(modeldir)
         cp_fn = '{epoch:03d}-{val_loss:.5f}.hdf5'
         return keras.callbacks.ModelCheckpoint(modeldir + cp_fn, monitor='val_loss',
@@ -90,55 +75,66 @@ class Modeler(object):
             height_shift_range=0.2,
             horizontal_flip=True)
 
-    def set_x_y(self, x, y):
-        self.x_train[self.sample_counter % self.sample_num] = x
-        self.y_train[self.sample_counter % self.sample_num] = y
-        self.sample_counter += 1
-
-    def fit_full_datagen(self, epochs, from_epoch=0):
+    def set_validation_split(self, validation_fraction):
         samples_total = len(self.y_train)
-        split = int(samples_total * .3)
-        samples = samples_total - split
-        x_val, y_val = self.x_train[:split], self.y_train[:split]
-        x_train, y_train = self.x_train[split:], self.y_train[split:]
-        x_train_mean_c = np.mean(x_train, axis=(0, 1, 2))
-        x_train_std_c = np.std(x_train, axis=(0, 1, 2))
-        self.x_train -= x_train_mean_c
-        self.x_train /= x_train_std_c
-        batch_size = 128
-        LOG.info('Training with data generation for model=[%s]' % self.name)
-        LOG.info('train samples=[%s], validation samples=[%s], batch size=[%s], epochs=[%s]' % (samples, split, batch_size, epochs))
-        LOG.info('train data channel means=%s & stdev=%s' % (x_train_mean_c, x_train_std_c))
-        steps_per_epochs = samples // batch_size
-        self.model.fit_generator(self.datagen.flow(x_train, y_train, batch_size=batch_size),
+        split = int(samples_total * validation_fraction)
+        self.x_val = self.x_train[:split]
+        self.y_val = self.y_train[:split]
+        self.x_train = self.x_train[split:]
+        self.y_train = self.y_train[split:]
+        LOG.info("Training model=[%s] with train samples=[%s] and validation samples=[%s]" % (self.name, self.x_train.shape[0], self.x_val.shape[0]))
+
+    def set_mean_and_std(self, mean=None, std=None):
+        self.x_mean = mean
+        self.x_std = std
+        if mean is None:
+            self.x_mean = np.mean(self.x_train, axis=(0, 1, 2))
+        if std is None:
+            self.x_std = np.std(self.x_train, axis=(0, 1, 2))
+        LOG.info("By-channel mean=[%s] and std=[%s]" % (self.x_mean, self.x_std))
+
+    def set_train_norm(self):
+        self.x_train -= self.x_mean
+        self.x_train /= self.x_std
+        self.x_val -= self.x_mean
+        self.x_val /= self.x_std
+
+    def set_test_norm(self):
+        self.x_test -= self.x_mean
+        self.x_test /= self.x_std
+
+    def fit_full_datagen(self, epochs=1, from_epoch=0, batch_size=128):
+        steps_per_epochs = self.x_train.shape[0] // batch_size
+        self.model.fit_generator(self.datagen.flow(self.x_train, self.y_train, batch_size=batch_size),
                                  steps_per_epochs,
                                  epochs=epochs,
                                  verbose=0,
-                                 validation_data=(x_val, y_val),
+                                 validation_data=(self.x_val, self.y_val),
                                  initial_epoch=from_epoch,
                                  callbacks=[self.tb_cb, self.cp_cb, self.el_cb])
-        """
-        self.model.fit(x_train, y_train,
-                       batch_size=batch_size,
-                       epochs=epochs,
-                       verbose=2,
-                       validation_data=(x_val, y_val),
-                       initial_epoch=from_epoch,
-                       callbacks=[self.tb_cb, self.cp_cb])
-        """
-        y_val_predict = predict_with_logic(self.model, x_val)
-        thresh = get_optimal_threshhold(y_val, y_val_predict)
-        return thresh
 
-    def checkpoint(self):
-        LOG.info('Saving model checkpoint for [%s]' % self.name)
-        cp_fn = '%s.hdf5' % self.name
-        keras.models.save_model(self.model, DH.basepath + '/model/' + cp_fn)
-        return
+    def set_threshholds(self, thresh=None):
+        self.thresh = thresh
+        if thresh is None:
+            predictions = self.predict_val()
+            self.thresh = get_optimal_threshhold(self.y_val, predictions)
+
+    def predict_test(self):
+        Y = self.model.predict(self.x_test)
+        np.apply_along_axis(atmos_prediction, Y)
+        return Y > self.thresh
+
+    def predict_val(self):
+        Y = self.model.predict(self.x_val)
+        np.apply_along_axis(atmos_prediction, Y)
+        return Y
 
 
-def fbeta(true_label, prediction):
-    return fbeta_score(true_label, prediction, beta=2, average='binary')
+def atmos_prediction(y):
+    most_likely = np.argmax(y[:len(ATMOS)])
+    y[most_likely] = 1.0
+    y[most_likely + 1:len(ATMOS)] = 0.0
+    y[:most_likely] = 0.0
 
 
 def get_optimal_threshhold(true_label, prediction, iterations=1000):
@@ -147,12 +143,12 @@ def get_optimal_threshhold(true_label, prediction, iterations=1000):
         best_fbeta = 0
         for i in range(1, iterations + 1):
             temp_value = i / float(iterations)
-            temp_fbeta = fbeta(true_label[:, t], prediction[:, t] > temp_value)
+            temp_fbeta = fbeta_score(true_label[:, t], prediction[:, t] > temp_value, beta=2, average='binary')
             if temp_fbeta > best_fbeta:
                 best_fbeta = temp_fbeta
                 best_threshhold[t] = temp_value
     LOG.info('Using thresholds: %s' % best_threshhold)
-    labels_list = ATMOS + LANDUSE
+    labels_list = LABELS
     cm = dict(zip(labels_list + ['all'], [{'tp': 0, 'fp': 0, 'tn': 0, 'fn': 0} for x in range(len(ATMOS + LANDUSE) + 1)]))
     for i, p in enumerate(prediction):
         for j, p_ in enumerate(p):
@@ -190,86 +186,18 @@ def get_optimal_threshhold(true_label, prediction, iterations=1000):
     return best_threshhold
 
 
-def prediction(M, X, thresh):
-    model_prediction = predict_with_logic(M, np.array([X]))
-    model_prediction = model_prediction[0]
-    labels = ATMOS + LANDUSE
-    for i, elem in enumerate(model_prediction):
-        model_prediction[i] = model_prediction[i] > thresh[i]
-    result = []
-    for i, label in enumerate(labels):
-        if model_prediction[i]:
-            result.append(label)
-    return ' '.join(result)
-
-
-def predict_with_logic(m, x):
-    Y = m.predict(x, verbose=1)
-    for idy, y in enumerate(Y):
-        # Chose the most likely single atmospheric condition
-        atmos_label_idx = np.argmax(y[:len(ATMOS)])
-        y[atmos_label_idx] = 1.0
-        y[:atmos_label_idx] = 0.0
-        y[atmos_label_idx + 1:len(ATMOS)] = 0.0
-        # If it's cloudly, then there are no land-use labels
-        if atmos_label_idx == 3:
-            y[4:] = 0.0
-        Y[idy] = y
-    return Y
-
-
-def write_submission(outputpath, m, thresh, mean, std):
-    maxn = None if SAMPLES > 10000 else 100
-    with open(output_basepath + outputpath, 'w') as fp:
+def write_predictions(Y, names, output_basepath, model_name):
+    with open(output_basepath + "/" + model_name + '.csv', 'w') as fp:
         fp.write('image_name,tags\n')
-        for name, X in DH.get_test_iter(imgtyp=IMGTYP, h=H, w=W, maxn=maxn, custom_path=output_basepath + "/test-data/"):
-            X = np.array(X, dtype='float32')
-            X -= mean
-            X /= std
-            p = prediction(m, X, thresh)
-            fp.write('%s,%s\n' % (name, p))
-
-
-def mkdir(d):
-    if not os.path.exists(d):
-        os.mkdir(d)
-
-
-def train(M, epochs, from_epoch=0):
-    LOG.info('Starting training run with samples=[%s]' % SAMPLES)
-    for X, Y in DH.get_train_iter(imgtyp=IMGTYP, h=H, w=W, maxn=SAMPLES):
-        M.set_x_y(X, Y.loc[:, ATMOS + LANDUSE].as_matrix()[0])
-    thresh = M.fit_full_datagen(epochs=epochs, from_epoch=from_epoch)
-    return thresh
-
-
-def main():
-    # name = 'vgg16-he-wi-%s' % IMGTYP
-    name = 'test-%s' % IMGTYP
-    submission = '%s.csv' % name
-    if args.train:
-        from_epoch = args.from_epoch
-        epochs = from_epoch + 1
-        if not args.from_saved:
-            m = multi_label_cnn(len(ATMOS + LANDUSE), H, W, CHANS)
-        else:
-            LOG.info('Loading model %s' % args.from_saved)
-            m = keras.models.load_model(args.from_saved)
-        M = Modeler(name, m, len(ATMOS + LANDUSE), SAMPLES)
-        train(M, epochs, from_epoch=from_epoch)
-    elif args.test:
-        thresh = args.thresh
-        mean = np.array(args.mean, dtype='float32')
-        std = np.array(args.std, dtype='float32')
-        model_fn = args.from_saved
-        m = keras.models.load_model(model_fn, compile=False)
-        name = model_fn.split('/')[-1].split('.')[0]
-        M = Modeler(name, m, len(ATMOS + LANDUSE), SAMPLES)
-        LOG.info("loading model=[%s]" % M)
-        LOG.info("Using thresh=[%s]" % thresh)
-        LOG.info("Using mean=[%s]" % mean)
-        LOG.info("Using std=[%s]" % std)
-        write_submission('/output/%s' % submission, M.model, thresh, mean, std)
+        for y, n in zip(Y, names):
+            row = n + ','
+            for i, p in enumerate(y):
+                if p:
+                    row += LABELS[i]
+                    row += ' '
+            row = row.strip()
+            row += '\n'
+            fp.write(row)
 
 
 class EpochLogger(keras.callbacks.Callback):
@@ -277,13 +205,55 @@ class EpochLogger(keras.callbacks.Callback):
         self.log = logger
 
     def on_epoch_end(self, epoch, logs):
-        self.log.info("Epoch %s: loss=[%s], val_loss=[%s]" % (epoch, logs['loss'], logs['val_loss']))
+        self.log.info('Epoch %s: loss=[%s], val_loss=[%s]' % (epoch, logs['loss'], logs['val_loss']))
+
+
+def main():
+    maxn = None
+    DH = DataHandler(input_basepath=input_basepath)
+    # Load in a model either from a file or from scratch
+    if args.from_saved is not None:
+        name = args.from_saved.split("/")[-1]
+        LOG.info('Loading model=[%s]' % name)
+        m = keras.models.load_model(args.from_saved)
+    else:
+        name = '{model_name}-{img_typ}'.format(model_name='foo', img_typ=IMGTYP)
+        LOG.info('Initializing model=[%s]' % name)
+        m = multi_label_cnn(LABELS_N, H, W, CHANS)
+    M = Modeler(name, m, output_basepath)
+    if args.train:
+        train_iter = DH.get_train_iter(imgtyp=IMGTYP, h=H, w=W, maxn=maxn)
+        M.x_train = np.empty(shape=(maxn, W, H, CHANS), dtype='float32')
+        M.y_train = np.empty(shape=(maxn, LABELS_N), dtype='bool')
+        for i, (x, y) in enumerate(train_iter):
+            M.x_train[i] = x
+            M.y_train[i] = y.loc[:, LABELS].as_matrix()[0]
+        M.set_validation_split()
+        M.set_mean_and_std()
+        M.set_train_norm()
+        M.fit_full_datagen(epochs=args.from_epoch + 100, from_epoch=args.from_epoch, batch_size=128)
+        M.set_threshholds()
+    elif args.test:
+        test_iter = DH.get_test_iter(imgtyp=IMGTYP, h=H, w=W, maxn=maxn)
+        M.x_test = np.empty(shape=(maxn, W, H, CHANS), dtype='float32')
+        names = np.empty(shape=(maxn), dtype='S10')
+        for i, (name, x) in enumerate(test_iter):
+            M.x_test[i] = x
+            names[i] = name
+        M.set_mean_and_std(mean=np.array(args.mean, dtype='float32'), std=np.array(args.std, dtype='float32'))
+        M.set_test_norm()
+        M.set_treshholds(thresh=np.array(args.thresh, dtype='float32'))
+        Y = M.predict_test()
+        write_predictions(Y, names, output_basepath, name)
 
 
 if __name__ == '__main__':
+    input_basepath, output_basepath = "/Users/kjs/repos/planet", "/Users/kjs/repos/planet"
     LOG = logging.getLogger(__name__)
     LOG.setLevel(logging.INFO)
-    logfile = output_basepath + '/log/' + 'planet-kaggle-cnn-v5.log'
+    logdir = output_basepath + '/log/'
+    mkdir(logdir)
+    logfile = logdir + "planet-kaggle.log"
     handler = logging.FileHandler(logfile)
     formatter = logging.Formatter('[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s')
     handler.setFormatter(formatter)
