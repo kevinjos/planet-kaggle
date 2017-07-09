@@ -188,6 +188,7 @@ def get_optimal_threshhold(true_label, prediction, iterations=1000):
 
 
 def write_predictions(Y, names, output_basepath, model_name):
+    output_basepath += "/output"
     with open(output_basepath + "/" + model_name + '.csv', 'w') as fp:
         fp.write('image_name,tags\n')
         for y, n in zip(Y, names):
@@ -210,12 +211,12 @@ class EpochLogger(keras.callbacks.Callback):
 
 
 def main():
-    maxn = None
+    maxn = 1000
     epochs = 10
     DH = DataHandler(input_basepath=input_basepath)
     # Load in a model either from a file or from scratch
     if args.from_saved is not None:
-        name = args.from_saved.split("/")[-1]
+        name = args.from_saved.split("/")[-2]
         LOG.info('Loading model=[%s]' % name)
         m = keras.models.load_model(args.from_saved)
     else:
@@ -233,7 +234,7 @@ def main():
             M.x_train[i] = x
             M.y_train[i] = y.loc[:, LABELS].as_matrix()[0]
             if i % 1000 == 0:
-                LOG.info('samples loaded=[%s]' % i + 1)
+                LOG.info('samples loaded=[%s]' % (i + 1))
         LOG.info('Loading train data complete')
         M.set_validation_split(validation_fraction=0.3)
         M.set_mean_and_std()
@@ -246,15 +247,15 @@ def main():
         test_iter = DH.get_test_iter(imgtyp=IMGTYP, h=H, w=W, maxn=maxn)
         M.x_test = np.empty(shape=(maxn, W, H, CHANS), dtype='float32')
         names = np.empty(shape=(maxn), dtype='S10')
-        for i, (name, x) in enumerate(test_iter):
+        for i, (n, x) in enumerate(test_iter):
             M.x_test[i] = x
-            names[i] = name
+            names[i] = n
             if i % 1000 == 0:
-                LOG.info('samples loaded=[%s]' % i + 1)
+                LOG.info('samples loaded=[%s]' % (i + 1))
         LOG.info('Loading test data complete')
         M.set_mean_and_std(mean=np.array(args.mean, dtype='float32'), std=np.array(args.std, dtype='float32'))
         M.set_test_norm()
-        M.set_treshholds(thresh=np.array(args.thresh, dtype='float32'))
+        M.set_threshholds(thresh=np.array(args.thresh, dtype='float32'))
         Y = M.predict_test()
         write_predictions(Y, names, output_basepath, name)
 

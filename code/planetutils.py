@@ -46,9 +46,9 @@ class FileHandler(object):
         elif samp == "train" and imgtyp == "jpg":
             path += self.train_jpg
         elif samp == "test" and imgtyp == "tif":
-            path = self.basepath + "/data/v2/" + self.test_tif
+            path += self.test_tif
         elif samp == "test" and imgtyp == "jpg":
-            path = self.basepath + "/data/v2/" + self.test_jpg
+            path += self.test_jpg
         files = os.listdir(path)
         random.shuffle(files)
         for fn in files[:maxn]:
